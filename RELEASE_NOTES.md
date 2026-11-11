@@ -1,4 +1,4 @@
-# StarSniff 星嗅 v2.1.0
+# StarSniff v2.1.0
 
 ## 下载
 
