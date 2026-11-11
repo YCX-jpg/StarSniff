@@ -346,6 +346,10 @@ class SettingsDialog(tk.Toplevel):
             value=smartproxy.normalize_mode(config.proxy_mode))
         self._update_payload = None
         self._update_checking = False
+        self._ytdlp_payload = None
+        self._ytdlp_downloading = False
+        self._ytdlp_cancel = threading.Event()
+        self._ytdlp_job = None
 
         width, height = theme.px(860), theme.px(640)
         try:
@@ -695,16 +699,108 @@ class SettingsDialog(tk.Toplevel):
         self._heading(page, "yt-dlp")
         self._check(page, "优先使用 yt-dlp（支持时列出剧集/清晰度）",
                     self.var_ytdlp).pack(anchor="w")
-        available = ytdlp.describe()
-        tk.Label(page, text=available, bg=theme.BG,
-                 fg=theme.SUCCESS if ytdlp.available() else theme.FG_FAINT,
-                 font=theme.FONT_TINY, anchor="w", justify="left",
-                 wraplength=theme.px(430)).pack(fill="x", pady=(theme.px(2), 0))
-        tk.Label(page, text="提示：把 yt-dlp.exe 放到软件目录即可启用；"
-                            "不支持时自动回到普通嗅探。",
+
+        yt_row = tk.Frame(page, bg=theme.BG)
+        yt_row.pack(fill="x", pady=(theme.px(4), 0))
+        self.ytdlp_status = tk.Label(
+            yt_row, text=ytdlp.describe(), bg=theme.BG,
+            fg=theme.SUCCESS if ytdlp.available() else theme.FG_FAINT,
+            font=theme.FONT_TINY, anchor="w", justify="left",
+            wraplength=theme.px(350))
+        self.ytdlp_status.pack(side="left", fill="x", expand=True)
+        self.btn_ytdlp = tk.Button(
+            yt_row, text="重新下载" if ytdlp.available() else "一键下载 yt-dlp",
+            bg=theme.CARD, fg=theme.FG_DIM, relief="flat", bd=0,
+            font=theme.FONT_SMALL, padx=10, pady=3,
+            activebackground=theme.CARD_HOVER, activeforeground=theme.FG,
+            cursor="hand2", command=self._download_ytdlp)
+        self.btn_ytdlp.pack(side="right", padx=(theme.px(8), 0))
+
+        tk.Label(page, text="点「一键下载」会从 GitHub 拉取官方 yt-dlp.exe 到软件目录；"
+                            "下载期间可继续操作，完成后立即启用。",
                  bg=theme.BG, fg=theme.FG_FAINT, font=theme.FONT_TINY,
                  anchor="w", justify="left", wraplength=theme.px(430)
                  ).pack(fill="x", pady=(theme.px(4), 0))
+
+    def _refresh_ytdlp_status(self) -> None:
+        try:
+            available = ytdlp.available()
+            self.ytdlp_status.configure(
+                text=ytdlp.describe(),
+                fg=theme.SUCCESS if available else theme.FG_FAINT)
+            if not self._ytdlp_downloading:
+                self.btn_ytdlp.configure(
+                    text="重新下载" if available else "一键下载 yt-dlp",
+                    state="normal")
+        except tk.TclError:
+            pass
+
+    def _download_ytdlp(self) -> None:
+        if self._ytdlp_downloading:
+            return
+        self._ytdlp_downloading = True
+        self._ytdlp_payload = None
+        self._ytdlp_cancel = threading.Event()
+        self.btn_ytdlp.configure(text="下载中…", state="disabled")
+        self.ytdlp_status.configure(text="正在连接 GitHub…", fg=theme.FG_DIM)
+        proxy = ""
+        direct = False
+        try:
+            mode = self.var_proxy_mode.get()
+            proxy = self.entry_proxy.get().strip()
+            direct = mode == smartproxy.DIRECT
+        except Exception:
+            pass
+        cancel = self._ytdlp_cancel
+
+        def work() -> None:
+            try:
+                path = ytdlp.download_latest(
+                    progress=lambda done, total: setattr(
+                        self, "_ytdlp_payload", ("progress", done, total)),
+                    cancel=cancel.is_set, proxy=proxy, direct=direct)
+                self._ytdlp_payload = ("done", path)
+            except Exception as exc:
+                self._ytdlp_payload = ("error", str(exc))
+
+        threading.Thread(target=work, daemon=True,
+                         name="ytdlp-install").start()
+        self._ytdlp_job = self.after(120, self._poll_ytdlp_download)
+
+    def _poll_ytdlp_download(self) -> None:
+        self._ytdlp_job = None
+        try:
+            if not self.winfo_exists():
+                return
+            payload = self._ytdlp_payload
+            if payload is None:
+                self._ytdlp_job = self.after(120, self._poll_ytdlp_download)
+                return
+            if payload[0] == "progress":
+                _, done, total = payload
+                if total:
+                    text = f"下载中 {done * 100 // total}%（{done / 1048576:.1f} MB）"
+                else:
+                    text = f"下载中 {done / 1048576:.1f} MB"
+                self.ytdlp_status.configure(text=text, fg=theme.FG_DIM)
+                self._ytdlp_payload = None
+                self._ytdlp_job = self.after(120, self._poll_ytdlp_download)
+                return
+            self._ytdlp_downloading = False
+            if payload[0] == "done":
+                self.var_ytdlp.set(True)
+                self.cfg.use_ytdlp = True
+                self.on_save()
+                self.ytdlp_status.configure(
+                    text="已下载并启用：" + os.path.basename(str(payload[1])),
+                    fg=theme.SUCCESS)
+                self._refresh_ytdlp_status()
+            else:
+                self.ytdlp_status.configure(
+                    text="下载失败：" + str(payload[1])[:120], fg=theme.ERROR)
+                self._refresh_ytdlp_status()
+        except tk.TclError:
+            pass
 
     def _spin(self, parent, low: int, high: int, value: int) -> tk.Spinbox:
         spin = tk.Spinbox(parent, from_=low, to=high, width=6, bg=theme.CARD,
@@ -1072,6 +1168,7 @@ class SettingsDialog(tk.Toplevel):
                 self._preview_job = None
         except tk.TclError:
             pass
+        self._cancel_ytdlp_job()
         self._closing = True
         self.destroy()
         self.on_apply(cfg)
@@ -1085,7 +1182,17 @@ class SettingsDialog(tk.Toplevel):
                 self.after_cancel(self._preview_job)
         except tk.TclError:
             pass
+        self._cancel_ytdlp_job()
         self.destroy()
+
+    def _cancel_ytdlp_job(self) -> None:
+        self._ytdlp_cancel.set()
+        try:
+            if self._ytdlp_job is not None:
+                self.after_cancel(self._ytdlp_job)
+                self._ytdlp_job = None
+        except tk.TclError:
+            pass
 
     def _center_on(self, master) -> None:
         try:

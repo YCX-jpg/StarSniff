@@ -87,6 +87,8 @@ StarSniff 不强制安装 yt-dlp，但检测到时会优先使用它：
   每一集作为一行资源加入列表（标题、时长、大小），可直接勾选下载；
 * 下载由 yt-dlp 子进程完成，解析百分比进度，支持停止/取消；
 * 不支持的站点会**自动回退**到普通嗅探，不影响原有能力；
+* **设置 → 嗅探 → yt-dlp** 提供「一键下载 yt-dlp」：从 GitHub 拉取官方
+  `yt-dlp.exe` 到软件目录，校验 MZ 头和大小后原子替换，下载过程不阻塞界面；
 * 设置「嗅探 → yt-dlp」里可以关闭优先使用。
 
 ### 嗅探
@@ -195,8 +197,8 @@ build_exe.ps1              本地构建 exe + Release zip
 无网络也能跑（yt-dlp 部分用伪可执行文件验证）：
 
 ```bat
-python tests\selftest.py     :: 117 项：嗅探、清单、并行/分段下载、HLS、主题、图标、更新、yt-dlp、解析器
-python tests\uitest.py       :: 101 项：布局、DPI、排序、窗口、无边框标题栏、5 套主题布局、更新不阻塞、下载、UA、代理、边界
+python tests\selftest.py     :: 118 项：嗅探、清单、并行/分段下载、HLS、主题、图标、更新、yt-dlp 一键下载、解析器
+python tests\uitest.py       :: 102 项：布局、DPI、排序、窗口、无边框标题栏、5 套主题布局、更新不阻塞、yt-dlp 按钮、下载、UA、代理、边界
 python tests\guishot.py      :: 生成截图并做版式像素校验
 ```
 
@@ -233,8 +235,8 @@ dist\StarSniff-portable.exe.sha256
 **自动发布**：把版本号改好并提交后，推一个 `v<版本>` tag：
 
 ```powershell
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.1.1
+git push origin v2.1.1
 ```
 
 GitHub Actions（`.github/workflows/release.yml`）会在 Windows runner 上
@@ -250,8 +252,9 @@ GitHub Actions（`.github/workflows/release.yml`）会在 Windows runner 上
 ## 常见问题
 
 **yt-dlp 怎么启用？**
-把 `yt-dlp.exe` 放到 `StarSniff` 目录（或加入 PATH），重启软件即可。
-设置「嗅探」页会显示检测状态；不安装也能正常使用普通嗅探。
+打开「设置 → 嗅探 → yt-dlp」，点「一键下载 yt-dlp」即可自动下载到软件目录；
+也可以手动把 `yt-dlp.exe` 放到 `StarSniff` 目录（或加入 PATH），重启软件。
+设置页会显示检测状态；不安装也能正常使用普通嗅探。
 
 **点「开始」后没走 yt-dlp？**
 可能该地址不受支持，或你在设置里关闭了「优先使用 yt-dlp」。

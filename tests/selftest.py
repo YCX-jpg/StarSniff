@@ -258,6 +258,19 @@ def test_download(items: list) -> None:
         check("分段下载进度回调覆盖完整文件",
               range_progress["last"] == 9000000,
               range_progress["last"])
+
+        # yt-dlp 一键下载（用本地假 exe，不访问 GitHub）
+        from resource_sniffer import ytdlp
+
+        inst_dir = os.path.join(folder, "ytdlp_install")
+        yt_path = ytdlp.download_latest(
+            dest_dir=inst_dir, url=f"{BASE}/ytdlp.exe", timeout=20)
+        with open(yt_path, "rb") as fh:
+            yt_head = fh.read(2)
+            yt_size = os.path.getsize(yt_path)
+        check("yt-dlp 一键下载并校验 exe",
+              yt_head == b"MZ" and yt_size == 2_000_002,
+              f"{yt_head!r} / {yt_size}")
         if hls_task and os.path.exists(hls_task.filepath):
             with open(hls_task.filepath, "rb") as fh:
                 data = fh.read(400)

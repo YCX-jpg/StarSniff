@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     构建 StarSniff 单文件 exe，并打成可直接上传 GitHub Releases 的 zip。

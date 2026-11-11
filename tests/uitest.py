@@ -489,6 +489,14 @@ def main() -> int:
                   and str(dlg.spin_segments.get()).isdigit(),
                   getattr(getattr(dlg, "spin_segments", None), "get",
                           lambda: "?")())
+            dlg._show_page("sniff")
+            pump(0.15)
+            check("设置页有一键下载 yt-dlp 按钮",
+                  hasattr(dlg, "btn_ytdlp")
+                  and "下载" in str(dlg.btn_ytdlp.cget("text")),
+                  getattr(getattr(dlg, "btn_ytdlp", None), "cget",
+                          lambda _k: "?")("text"))
+            dlg._show_page("appearance")
             # 手动测速走后台线程，结果回到界面，不应卡住设置窗口
             app.url_entry.set_value(f"{base}/page.html")
             dlg._test_route()

@@ -14,8 +14,12 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
+from . import __version__ as APP_VERSION
 
 
 class YtDlpError(Exception):
@@ -29,6 +33,86 @@ def _app_dir() -> str:
 
 
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+DOWNLOAD_URL = ("https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
+                "yt-dlp.exe")
+MIN_EXE_SIZE = 1_000_000
+
+
+def install_dir() -> str:
+    """yt-dlp.exe 的安装位置：源码运行时是版本目录，打包后是 exe 同级目录。"""
+    return _app_dir()
+
+
+def target_path() -> str:
+    return os.path.join(install_dir(), "yt-dlp.exe")
+
+
+def download_latest(dest_dir: str = "", progress=None, cancel=None,
+                    timeout: float = 60.0, url: str = DOWNLOAD_URL,
+                    proxy: str = "", direct: bool = False) -> str:
+    """从 GitHub 下载最新 yt-dlp.exe，原子替换到软件目录。
+
+    progress(done, total)；cancel() 返回 True 时中断。
+    返回安装后的 exe 路径。
+    """
+    destination = os.path.join((dest_dir or install_dir()).strip(),
+                               "yt-dlp.exe")
+    folder = os.path.dirname(os.path.abspath(destination))
+    os.makedirs(folder, exist_ok=True)
+    part = destination + ".part"
+    handlers = []
+    if direct:
+        handlers.append(urllib.request.ProxyHandler({}))
+    elif proxy.strip():
+        proxy = proxy.strip()
+        if "://" not in proxy:
+            proxy = "http://" + proxy
+        handlers.append(urllib.request.ProxyHandler({
+            "http": proxy, "https": proxy}))
+    opener = urllib.request.build_opener(*handlers)
+    request = urllib.request.Request(url, headers={
+        "User-Agent": f"StarSniff/{APP_VERSION} (yt-dlp installer)",
+        "Accept": "application/octet-stream",
+    })
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            try:
+                total = int(response.headers.get("Content-Length") or 0)
+            except (TypeError, ValueError):
+                total = 0
+            done = 0
+            with open(part, "wb", buffering=1024 * 1024) as fh:
+                while True:
+                    if cancel and cancel():
+                        raise YtDlpError("已取消下载")
+                    block = response.read(256 * 1024)
+                    if not block:
+                        break
+                    fh.write(block)
+                    done += len(block)
+                    if progress:
+                        progress(done, total)
+            if cancel and cancel():
+                raise YtDlpError("已取消下载")
+            if done < MIN_EXE_SIZE:
+                raise YtDlpError(f"下载内容过小（{done} 字节），可能不是 yt-dlp.exe")
+            with open(part, "rb") as fh:
+                if fh.read(2) != b"MZ":
+                    raise YtDlpError("下载内容不是 Windows exe（缺少 MZ 头）")
+        os.replace(part, destination)
+    except urllib.error.HTTPError as exc:
+        raise YtDlpError(f"GitHub 返回 HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise YtDlpError(f"下载失败：{exc}") from exc
+    finally:
+        try:
+            if os.path.exists(part):
+                os.remove(part)
+        except OSError:
+            pass
+    reset()
+    return destination
 
 
 @dataclass

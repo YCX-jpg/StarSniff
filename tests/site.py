@@ -322,6 +322,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self._send_text('{"items":[{"url":"/assets/media/song.mp3"}]}',
                             "application/json")
             return
+        if path == "/ytdlp.exe":
+            data = b"MZ" + bytes((i * 17 + 3) % 256 for i in range(2_000_000))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path.startswith("/range/"):
             try:
                 size = max(0, min(32 << 20, int(path.rsplit("/", 1)[-1])))
