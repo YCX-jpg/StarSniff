@@ -1,0 +1,1515 @@
+"""自绘控件：主按钮、图标按钮、自定义资源列表（预览 + 复选框）。"""
+
+from __future__ import annotations
+
+import tkinter as tk
+import tkinter.font as tkfont
+from tkinter import ttk
+from typing import Callable, Optional
+
+from . import theme
+from .mediainfo import fmt_size
+
+
+def round_rect(canvas: tk.Canvas, x1, y1, x2, y2, radius=8, **kwargs):
+    """在 Canvas 上画圆角矩形。"""
+    radius = max(0, min(radius, abs(x2 - x1) // 2, abs(y2 - y1) // 2))
+    points = [
+        x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+        x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+        x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, splinesteps=12, **kwargs)
+
+
+def ellipsize(text: str, font: tkfont.Font, max_width: int) -> str:
+    """按像素宽度截断文本并加省略号。"""
+    if max_width <= 0:
+        return ""
+    if font.measure(text) <= max_width:
+        return text
+    ellipsis = "…"
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if font.measure(text[:mid] + ellipsis) <= max_width:
+            low = mid
+        else:
+            high = mid - 1
+    return text[:low] + ellipsis if low > 0 else ellipsis
+
+
+def wrap_lines(text: str, font: tkfont.Font, max_width: int,
+               max_lines: int = 2) -> list[str]:
+    """按像素宽度自动换行（中英混排按字符切分）。"""
+    if max_width <= 0 or max_lines <= 0:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for ch in text:
+        if font.measure(current + ch) <= max_width:
+            current += ch
+            continue
+        if current:
+            lines.append(current)
+        current = ch
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    # 单行仍超宽 → 省略
+    if len(lines) == max_lines:
+        consumed = sum(len(line) for line in lines)
+        if consumed < len(text):
+            if len(lines) == 1:
+                lines[0] = ellipsize(lines[0], font, max_width)
+            else:
+                lines[-1] = ellipsize(lines[-1], font, max_width)
+    return lines or [""]
+
+
+class AccentButton(tk.Canvas):
+    """自绘按钮：支持 hover/按压动画、复古 3D 边框和玻璃高光。"""
+
+    def __init__(self, master, text: str, command: Optional[Callable] = None,
+                 width: int = 0, height: int = 0, color: str = "",
+                 hover: Optional[str] = None, fg: str = "#ffffff",
+                 font=None, radius: int = 0, border: str = "",
+                 bg: str = ""):
+        color = color or theme.ACCENT
+        hover = hover or theme.ACCENT_HOVER
+        width = width or theme.px(104)
+        height = height or theme.px(34)
+        super().__init__(master, width=width, height=height,
+                        bg=bg or theme.PANEL,
+                        highlightthickness=0, bd=0, takefocus=1)
+        self._text = text
+        self._command = command
+        self._color = color
+        self._hover_color = hover or theme.ACCENT_HOVER
+        self._fg = fg
+        self._font = font or theme.FONT_BUTTON
+        self._radius = radius or theme.button_radius()
+        self._border = border
+        self._bw, self._bh = width, height
+        self._state = "normal"
+        self._hovering = False
+        self._pressed = False
+        self._fill = color
+        self._anim_job = None
+        self._draw()
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<Return>", lambda _e: self.invoke())
+        self.bind("<space>", lambda _e: self.invoke())
+        self.configure(cursor="hand2")
+
+    # ------------------------------------------------------------------ 绘制
+    def _panel_color(self) -> str:
+        try:
+            return self.master.cget("bg")
+        except tk.TclError:
+            return theme.PANEL
+
+    def _draw(self) -> None:
+        self.delete("all")
+        p = theme.px
+        enabled = self._state == "normal"
+        fill = self._fill
+        fg = self._fg
+        if not enabled:
+            fill = theme.blend(theme.CARD, theme.BG, 0.55)
+            fg = theme.FG_FAINT
+        if theme.CLASSIC:
+            self._draw_classic(fill, fg)
+            return
+        inset = p(1) if self._pressed and theme.MOTION == "spring" else 0
+        if theme.NEON:
+            # 霓虹：外层淡光 + 内层实心，悬停时更亮
+            glow = theme.blend(theme.ACCENT, theme.BG, 0.35 if self._hovering
+                               else 0.55)
+            round_rect(self, 1, 1, self._bw - 1, self._bh - 1,
+                       self._radius + p(2), fill=glow, outline="")
+        outline = self._border
+        if theme.ACRYLIC and not outline:
+            outline = theme.blend(theme.BORDER_LIGHT, theme.BORDER, 0.6)
+        x1, y1 = 1 + inset, 1 + inset
+        x2, y2 = self._bw - 1 - inset, self._bh - 1 - inset
+        if outline:
+            round_rect(self, x1, y1, x2, y2, self._radius,
+                       fill=fill, outline=outline, width=1)
+        else:
+            round_rect(self, x1, y1, x2, y2, self._radius,
+                       fill=fill, outline="")
+        if theme.GLASS:
+            # 顶部一条高光 + 底部柔和阴影，模拟玻璃反光
+            self.create_line(p(10), y1 + p(1), self._bw - p(10), y1 + p(1),
+                             fill=theme.blend(fill, "#ffffff", 0.5),
+                             width=max(1, p(1)), capstyle="round")
+            self.create_line(p(12), y2 - p(1), self._bw - p(12), y2 - p(1),
+                             fill=theme.blend(fill, "#000000", 0.22),
+                             width=max(1, p(1)), capstyle="round")
+        if theme.ACRYLIC and not self._pressed:
+            self.create_line(p(12), y1 + p(1), self._bw - p(12), y1 + p(1),
+                             fill=theme.blend(fill, "#ffffff", 0.16),
+                             width=1)
+        self.create_text(self._bw / 2, self._bh / 2,
+                         text=self._text, fill=fg, font=self._font)
+
+    def _draw_classic(self, fill: str, fg: str) -> None:
+        """Windows 2000 风格：灰底 + 3D 边框（按下时边框翻转）。"""
+        w, h = self._bw, self._bh
+        self.create_rectangle(0, 0, w, h, fill=fill, outline=theme.BORDER_LIGHT)
+        light, dark = "#ffffff", theme.BORDER_LIGHT
+        if self._pressed:
+            light, dark = dark, light
+        self.create_line(1, 1, w - 1, 1, fill=light)
+        self.create_line(1, 1, 1, h - 1, fill=light)
+        self.create_line(1, h - 1, w - 1, h - 1, fill=dark)
+        self.create_line(w - 1, 1, w - 1, h - 1, fill=dark)
+        self.create_text(w / 2, h / 2 + (1 if self._pressed else 0),
+                         text=self._text, fill=fg, font=self._font)
+
+    def _animate_to(self, target: str) -> None:
+        if self._anim_job is not None:
+            try:
+                self.after_cancel(self._anim_job)
+            except tk.TclError:
+                pass
+            self._anim_job = None
+        if not theme.ANIMATIONS or theme.CLASSIC:
+            self._fill = target
+            self._draw()
+            return
+        start = self._fill
+        steps = 7
+
+        def step(index: int = 0) -> None:
+            try:
+                if not self.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            weight = index / steps
+            self._fill = theme.blend(target, start, weight)
+            self._draw()
+            if index < steps:
+                self._anim_job = self.after(16, lambda: step(index + 1))
+            else:
+                self._anim_job = None
+
+        step(0)
+
+    def _on_enter(self, _e=None):
+        self._hovering = True
+        if self._state == "normal" and not self._pressed:
+            self._animate_to(self._hover_color)
+
+    def _on_leave(self, _e=None):
+        self._hovering = False
+        if self._state == "normal" and not self._pressed:
+            self._animate_to(self._color)
+
+    def _on_press(self, _e=None):
+        if self._state != "normal":
+            return
+        self._pressed = True
+        if theme.CLASSIC:
+            self._draw()
+            return
+        self._fill = theme.blend(self._color, "#000000", 0.28)
+        self._draw()
+
+    def _on_release(self, event=None):
+        if self._state != "normal":
+            self._pressed = False
+            self._draw()
+            return
+        self._pressed = False
+        self._animate_to(self._hover_color if self._hovering else self._color)
+        inside = 0 <= (event.x if event else 0) <= self._bw and \
+            0 <= (event.y if event else 0) <= self._bh
+        if inside and self._command:
+            self._command()
+
+    # ------------------------------------------------------------------ API
+    def invoke(self) -> None:
+        if self._state == "normal" and self._command:
+            self._command()
+
+    def set_state(self, state: str) -> None:
+        self._state = state
+        self.configure(cursor="hand2" if state == "normal" else "arrow")
+        self._draw()
+
+    def set_text(self, text: str) -> None:
+        self._text = text
+        self._draw()
+
+    def set_command(self, command: Callable) -> None:
+        self._command = command
+
+
+class IconButton(tk.Canvas):
+    """小号图标/文字按钮（用于行内操作）。"""
+
+    def __init__(self, master, text: str, command=None, width: int = 28,
+                 height: int = 24, color: str = theme.FG_DIM):
+        bg = theme.PANEL
+        super().__init__(master, width=width, height=height, bg=bg,
+                        highlightthickness=0, bd=0)
+        self._text = text
+        self._command = command
+        self._color = color
+        self._bw, self._bh = width, height
+        self.create_text(width / 2, height / 2, text=text, fill=color,
+                         font=theme.FONT_SMALL)
+        self.bind("<Button-1>", lambda _e: command() if command else None)
+        self.bind("<Enter>", lambda _e: self.itemconfigure(1, fill=theme.FG))
+        self.bind("<Leave>", lambda _e: self.itemconfigure(1, fill=self._color))
+        self.configure(cursor="hand2")
+
+
+# --------------------------------------------------------------------------
+# 滚动条（加宽、深色、可拖拽）
+# --------------------------------------------------------------------------
+class SlimScrollbar(tk.Canvas):
+    """自绘细滚动条，替代 ttk.Scrollbar 以获得统一深色外观。"""
+
+    def __init__(self, master, command: Callable[[str], None],
+                 width: int = 10):
+        super().__init__(master, width=width, bg=theme.PANEL,
+                        highlightthickness=0, bd=0)
+        self._command = command
+        self._fraction = 0.0
+        self._total = 1.0
+        self._bw = width
+        self._dragging = False
+        self._drag_fraction = 0.0
+        self.bind("<Configure>", lambda _e: self._redraw())
+        self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    def set(self, f, l):
+        self._fraction = float(f)
+        self._total = float(l)
+        self._redraw()
+
+    def _redraw(self):
+        self.delete("all")
+        h = self.winfo_height()
+        if h <= 1:
+            return
+        span = self._total - self._fraction
+        if span >= 0.999:
+            return
+        top = self._fraction * h
+        bottom = max(top + 24, self._total * h)
+        bottom = min(bottom, h)
+        round_rect(self, 2, top, self._bw - 2, bottom, 4,
+                   fill=theme.BORDER_LIGHT, outline="")
+
+    def _on_press(self, event):
+        h = self.winfo_height()
+        if h <= 1:
+            return
+        if self._total - self._fraction >= 0.999:
+            click_h = max(0.05, event.y / h - 0.05)
+            self._command("moveto", str(click_h))
+            return
+        top = self._fraction * h
+        bottom = self._total * h
+        if top <= event.y <= bottom:
+            self._dragging = True
+            self._drag_fraction = event.y / h
+            self._fraction = max(0.0, min(1.0, event.y / h - 0.02))
+            self._redraw()
+            self._command("moveto", str(self._fraction))
+            return
+        click_h = max(0.05, event.y / h - 0.05)
+        self._command("moveto", str(click_h))
+
+    def _on_drag(self, event):
+        if not self._dragging:
+            return
+        h = self.winfo_height()
+        if h <= 1:
+            return
+        fraction = (event.y - self._drag_fraction * h) / h
+        self._fraction = max(0.0, min(1.0, fraction))
+        self._redraw()
+        self._command("moveto", str(self._fraction))
+
+    def _on_release(self, _event):
+        self._dragging = False
+
+
+# --------------------------------------------------------------------------
+# 资源列表
+# --------------------------------------------------------------------------
+class ResourceList(tk.Frame):
+    """资源列表：左侧预览（缩略图 / 时长+码率 / 分辨率+时长），右侧文件名、大小、链接。
+
+    * 整行可以勾选（复选框），Ctrl/Shift 支持多选高亮；
+    * 鼠标悬停高亮，双击打开链接，右键菜单；
+    * 用 Canvas 自绘 + 手动虚拟化（只画可见行），上千条也不卡。
+    """
+
+    PAD_X = 12
+
+    def __init__(self, master, on_change: Optional[Callable] = None,
+                 on_open: Optional[Callable] = None,
+                 on_context: Optional[Callable] = None):
+        list_style = theme.LAYOUT.get("list", "rows")
+        list_bg = theme.BG if list_style == "cards" else theme.PANEL
+        super().__init__(master, bg=list_bg, highlightthickness=0)
+        # _source 保存全部资源；items 只是当前筛选后可见的部分
+        self._source: list = []
+        self.items: list = []
+        self._photos: dict[str, tk.PhotoImage] = {}
+        self._placeholders: dict[str, tk.PhotoImage] = {}
+        self._row_index: dict[int, int] = {}
+        self._hover: Optional[int] = None
+        self._selected: set[int] = set()
+        self._filter_kind = "all"
+        self._filter_query = ""
+        self._sort_key = "default"
+        self._sort_dirty = False
+        self._on_change = on_change or (lambda: None)
+        self._on_open = on_open or (lambda _item: None)
+        self._on_context = on_context or (lambda _e, _item: None)
+        self._rows_drawn: list[int] = []
+        # 批量插入时合并重绘，避免 N 次全表刷新
+        self._redraw_pending = False
+        self._change_pending = False
+        self.empty_hint = "还没有嗅探到资源\n在上方输入网址后点击「开始」"
+
+        self.f_title = tkfont.Font(family=theme.FONT_FAMILY, size=10)
+        self.f_title_bold = tkfont.Font(family=theme.FONT_FAMILY, size=10,
+                                        weight="bold")
+        self.f_dim = tkfont.Font(family=theme.FONT_FAMILY, size=9)
+        self.f_tiny = tkfont.Font(family=theme.FONT_FAMILY, size=8)
+        self.f_preview = tkfont.Font(family="Segoe UI", size=9, weight="bold")
+        self.f_url = tkfont.Font(family="Consolas", size=8)
+
+        self.canvas = tk.Canvas(self, bg=list_bg, highlightthickness=0,
+                                bd=0)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scroll = SlimScrollbar(self, self.canvas.yview, width=theme.px(11))
+        self.scroll.pack(side="right", fill="y", padx=(0, 2), pady=2)
+        self.canvas.configure(yscrollcommand=self.scroll.set)
+
+        self.canvas.bind("<Configure>", lambda _e: self.redraw())
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
+        self.canvas.bind("<Button-4>", lambda _e: self._on_wheel_delta(-3))
+        self.canvas.bind("<Button-5>", lambda _e: self._on_wheel_delta(3))
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", self._on_leave)
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<Double-Button-1>", self._on_double)
+        self.canvas.bind("<Button-3>", self._on_right)
+        self.canvas.bind("<Control-a>", lambda _e: self.select_all())
+        self.canvas.bind("<space>", lambda _e: self.toggle_selected())
+        self.bind("<Control-a>", lambda _e: self.select_all())
+
+    # ------------------------------------------------------------------ 数据
+    def set_empty_hint(self, text: str) -> None:
+        """空列表时的提示文字（嗅探过程中显示进度）。"""
+        if text != self.empty_hint:
+            self.empty_hint = text
+            if not self.items:
+                self.request_redraw()
+
+    def set_source(self, items: list) -> None:
+        """设置完整资源集合（筛选不会破坏它）。"""
+        self._source = list(items)
+        self._selected.clear()
+        self._recompute()
+
+    def apply_filter(self, kind: str = "all", query: str = "") -> None:
+        self._filter_kind = kind or "all"
+        self._filter_query = (query or "").lower().strip()
+        self._selected.clear()
+        self._recompute()
+
+    # ------------------------------------------------------------------ 排序
+    SORT_KEYS = ("default", "size", "kind", "name")
+    _KIND_ORDER = {"image": 0, "audio": 1, "video": 2, "stream": 3}
+
+    def apply_sort(self, key: str) -> None:
+        """切换排序方式：默认（嗅探顺序）/ 大小 / 类型 / 文件名。"""
+        key = key if key in self.SORT_KEYS else "default"
+        if key == self._sort_key:
+            return
+        selected = {id(it) for it in self.selected_items()}
+        self._sort_key = key
+        self._recompute(keep_scroll=True)
+        self._restore_selection(selected)
+
+    def _sort_key_of(self, item):
+        kind = getattr(item, "kind", "")
+        size = getattr(item, "size", 0) or 0
+        name = (getattr(item, "filename", "")
+                or getattr(item, "url", "")).lower()
+        if self._sort_key == "size":
+            return (0, -size, name)
+        if self._sort_key == "kind":
+            return (self._KIND_ORDER.get(kind, 9), -size, name)
+        if self._sort_key == "name":
+            return (name, "")
+        return (0, 0, "")
+
+    def _sort_items(self) -> None:
+        if self._sort_key != "default":
+            self.items.sort(key=self._sort_key_of)
+
+    def _resort_in_place(self) -> None:
+        """批量插入/元数据更新后统一排序一次（由空闲刷新触发）。"""
+        if self._sort_key == "default":
+            return
+        selected = {id(it) for it in self.selected_items()}
+        self._sort_items()
+        self._row_index = {id(it): i for i, it in enumerate(self.items)}
+        self._restore_selection(selected)
+
+    def _restore_selection(self, ids: set[int]) -> None:
+        self._selected = ({i for i, it in enumerate(self.items)
+                           if id(it) in ids} if ids else set())
+        self.redraw()
+
+    def _matches(self, item) -> bool:
+        if self._filter_kind != "all" and getattr(item, "kind", "") != self._filter_kind:
+            return False
+        if self._filter_query:
+            haystack = f"{getattr(item, 'filename', '')} {getattr(item, 'url', '')}"
+            if self._filter_query not in haystack.lower():
+                return False
+        return True
+
+    def _recompute(self, keep_scroll: bool = False) -> None:
+        self.items = [it for it in self._source if self._matches(it)]
+        self._sort_items()
+        self._row_index = {id(it): i for i, it in enumerate(self.items)}
+        self._rebuild()
+        if not keep_scroll:
+            try:
+                self.canvas.yview_moveto(0)
+            except tk.TclError:
+                pass
+        self._on_change()
+
+    def add_item(self, item) -> None:
+        self._source.append(item)
+        if self._matches(item):
+            self.items.append(item)
+            self._row_index[id(item)] = len(self.items) - 1
+            if self._sort_key != "default":
+                self._sort_dirty = True        # 空闲时统一重排，避免逐条排序
+            self._update_scrollregion()
+            self.request_redraw()
+        self.request_change()
+
+    # ------------------------------------------------- 合并刷新（批量友好）
+    def request_redraw(self) -> None:
+        """请求一次延迟重绘；同一批插入只重绘一次。"""
+        if self._redraw_pending:
+            return
+        self._redraw_pending = True
+        try:
+            self.after_idle(self._flush_ui)
+        except tk.TclError:
+            self._redraw_pending = False
+
+    def request_change(self) -> None:
+        """请求一次延迟的变更通知（用于刷新统计/页签计数）。"""
+        if self._change_pending:
+            return
+        self._change_pending = True
+        self.request_redraw()
+
+    def _flush_ui(self) -> None:
+        self._redraw_pending = False
+        if self._sort_dirty:
+            self._sort_dirty = False
+            try:
+                self._resort_in_place()
+            except tk.TclError:
+                return
+        try:
+            self.redraw()
+        except tk.TclError:
+            return
+        if self._change_pending:
+            self._change_pending = False
+            try:
+                self._on_change()
+            except tk.TclError:
+                pass
+
+    def all_items(self) -> list:
+        return list(self._source)
+
+    def remove_item(self, item) -> None:
+        """从列表中移除一个条目（用于合并重复变体）。"""
+        self._source = [it for it in self._source if it is not item]
+        if item in self.items:
+            self.items = [it for it in self.items if it is not item]
+            self._row_index = {id(it): i for i, it in enumerate(self.items)}
+            self._update_scrollregion()
+        self.request_change()
+
+    def update_item(self, item) -> None:
+        # 元数据（大小/类型/文件名）变化会影响排序，空闲时统一重排一次
+        if self._sort_key != "default":
+            self._sort_dirty = True
+        self.request_redraw()
+
+    def clear(self) -> None:
+        self._source.clear()
+        self.items.clear()
+        self._row_index.clear()
+        self._selected.clear()
+        self._photos.clear()
+        self._rebuild()
+        self._on_change()
+
+    def filtered(self, kind_filter: str = "all", query: str = "") -> list:
+        """（保留兼容）返回按条件筛选后的列表，不修改内部状态。"""
+        query = (query or "").lower().strip()
+        out = []
+        for item in self._source:
+            if kind_filter != "all" and getattr(item, "kind", "") != kind_filter:
+                continue
+            if query:
+                haystack = f"{getattr(item, 'filename', '')} {item.url}".lower()
+                if query not in haystack:
+                    continue
+            out.append(item)
+        return out
+
+    # ------------------------------------------------------------------ 选择
+    def selected_items(self) -> list:
+        return [self.items[i] for i in sorted(self._selected)
+                if 0 <= i < len(self.items)]
+
+    def checked_items(self) -> list:
+        """所有已勾选资源（不受当前筛选影响）。"""
+        return [it for it in self._source if getattr(it, "checked", False)]
+
+    def toggle_selected(self) -> None:
+        for item in self.selected_items():
+            item.checked = not item.checked
+        self.redraw()
+        self._on_change()
+
+    def select_all(self, only_visible: bool = True) -> None:
+        targets = self.items if only_visible else self._source
+        for item in targets:
+            item.checked = True
+        self.redraw()
+        self._on_change()
+
+    def select_none(self) -> None:
+        for item in self._source:
+            item.checked = False
+        self.redraw()
+        self._on_change()
+
+    def set_checked(self, items, checked: bool = True) -> None:
+        for item in items:
+            item.checked = checked
+        self.redraw()
+        self._on_change()
+
+    def set_selected(self, items) -> None:
+        self._selected = {self._row_index[id(it)] for it in items
+                          if id(it) in self._row_index}
+        self.redraw()
+
+    def checked_count(self) -> int:
+        return sum(1 for it in self._source if getattr(it, "checked", False))
+
+    # ------------------------------------------------------------------ 绘制
+    def _rebuild(self) -> None:
+        self.canvas.delete("all")
+        self._rows_drawn.clear()
+        self._update_scrollregion()
+        self.redraw()
+
+    def _update_scrollregion(self) -> None:
+        height = max(1, len(self.items)) * theme.ROW_HEIGHT + 8
+        self.canvas.configure(scrollregion=(0, 0, 1, height))
+
+    def _thumb(self, item):
+        """取得缩略图 PhotoImage，并保证不超过预览框（过大时整数降采样）。"""
+        key = item.url
+        photo = self._photos.get(key)
+        if photo is not None:
+            return photo
+        data = getattr(item, "thumbnail", None)
+        if not data:
+            return None
+        try:
+            try:
+                photo = tk.PhotoImage(data=data, format="png")
+            except tk.TclError:
+                from PIL import Image, ImageTk  # type: ignore
+                import io
+
+                img = Image.open(io.BytesIO(data))
+                photo = ImageTk.PhotoImage(img)
+            box = theme.THUMB_SIZE
+            factor = 1
+            while max(photo.width(), photo.height()) // factor > box:
+                factor += 1
+            if factor > 1:
+                photo = photo.subsample(factor, factor)
+            self._photos[key] = photo
+            return photo
+        except Exception:
+            return None
+
+    def _placeholder(self, kind: str) -> tk.PhotoImage:
+        photo = self._placeholders.get(kind)
+        if photo is not None:
+            return photo
+        size = theme.THUMB_SIZE
+        image = tk.PhotoImage(width=size, height=size)
+        image.put(theme.THUMB_BG, to=(0, 0, size, size))
+        self._placeholders[kind] = image
+        return image
+
+    def redraw(self) -> None:
+        canvas = self.canvas
+        canvas.delete("all")
+        width = max(canvas.winfo_width(), 200)
+        height = max(canvas.winfo_height(), 100)
+        top = canvas.canvasy(0)
+        first = max(0, int(top // theme.ROW_HEIGHT) - 1)
+        visible = int(height // theme.ROW_HEIGHT) + 3
+        last = min(len(self.items), first + visible)
+
+        if not self.items:
+            self._draw_empty(width, height)
+            return
+
+        gap = theme.px(int(theme.LAYOUT.get("card_gap", 0)))
+        for index in range(first, last):
+            item = self.items[index]
+            y = index * theme.ROW_HEIGHT + max(2, gap // 2)
+            self._draw_row(index, item, y,
+                           theme.ROW_HEIGHT - max(4, gap), width)
+
+    def _draw_empty(self, width: int, height: int) -> None:
+        """空列表：居中图标 + 标题 + 说明。"""
+        canvas = self.canvas
+        p = theme.px
+        cx = width / 2
+        cy = min(height / 2, p(210))
+        box = p(64)
+        top = cy - box / 2 - p(26)
+        round_rect(canvas, cx - box / 2, top, cx + box / 2, top + box,
+                   theme.card_radius(), fill=theme.CARD, outline=theme.BORDER)
+        # 放大镜
+        r = p(13)
+        canvas.create_oval(cx - r, top + box / 2 - r - p(2),
+                           cx + r, top + box / 2 + r - p(2),
+                           outline=theme.FG_FAINT, width=max(2, p(2)))
+        canvas.create_line(cx + r * 0.7, top + box / 2 + r * 0.7 - p(2),
+                           cx + r * 1.5, top + box / 2 + r * 1.5 - p(2),
+                           fill=theme.FG_FAINT, width=max(2, p(2)),
+                           capstyle="round")
+        lines = (self.empty_hint or "").split("\n")
+        title = lines[0] if lines else ""
+        rest = "\n".join(line for line in lines[1:] if line)
+        canvas.create_text(cx, top + box + p(24), text=title,
+                           fill=theme.FG_DIM, justify="center",
+                           font=(theme.FONT_FAMILY, 11, "bold"))
+        if rest:
+            canvas.create_text(cx, top + box + p(50), text=rest,
+                               fill=theme.FG_FAINT, justify="center",
+                               font=(theme.FONT_FAMILY, 9))
+
+    def _draw_row(self, index: int, item, y: float, h: float, width: int) -> None:
+        canvas = self.canvas
+        p = theme.px
+        style = theme.LAYOUT.get("list", "rows")
+        margin = p(24) if style == "cards" else p(6)
+        x1, x2 = margin, width - margin
+        checked = bool(getattr(item, "checked", False))
+        selected = index in self._selected
+        hovered = self._hover == index
+        if style == "cards":
+            base = theme.CARD
+            if checked:
+                fill = theme.blend(theme.ACCENT, base, 0.22)
+            elif selected:
+                fill = theme.blend(theme.ACCENT, base, 0.12)
+            elif hovered:
+                fill = theme.CARD_HOVER
+            else:
+                fill = base
+            round_rect(canvas, x1, y, x2, y + h, theme.card_radius(), fill=fill,
+                       outline=theme.blend(theme.BORDER_LIGHT, fill, 0.55),
+                       width=1)
+            # 液态玻璃的顶部反光
+            canvas.create_line(x1 + p(18), y + 1, x2 - p(18), y + 1,
+                               fill=theme.blend(fill, "#ffffff", 0.28),
+                               width=1)
+        elif style == "flat":
+            fill = (theme.SELECTED_ROW if checked else
+                    theme.ROW_HOVER if (selected or hovered) else theme.PANEL)
+            canvas.create_rectangle(x1, y, x2, y + h, fill=fill,
+                                    outline=theme.BORDER)
+            canvas.create_line(x1 + 1, y + 1, x2 - 1, y + 1, fill="#ffffff")
+            if checked or selected:
+                canvas.create_line(x1 + p(8), y + p(10), x1 + p(8),
+                                   y + h - p(10), fill=theme.ACCENT,
+                                   width=max(2, p(3)))
+        else:
+            if checked:
+                fill = theme.SELECTED_ROW
+            elif selected:
+                fill = theme.blend(theme.ACCENT, theme.PANEL, 0.12)
+            elif hovered:
+                fill = theme.ROW_HOVER
+            else:
+                fill = theme.PANEL
+            round_rect(canvas, x1, y, x2, y + h, theme.card_radius(), fill=fill,
+                       outline="")
+            if checked or selected:
+                canvas.create_line(x1 + p(10), y + p(14), x1 + p(10),
+                                   y + h - p(14), fill=theme.ACCENT,
+                                   width=max(2, p(3)), capstyle="round")
+            if not (checked or selected or hovered):
+                canvas.create_line(x1 + p(22), y + h, x2 - p(14), y + h,
+                                   fill=theme.BORDER, width=1)
+        if style == "cards" and (checked or selected):
+            canvas.create_line(x1 + p(14), y + p(14), x1 + p(14),
+                               y + h - p(14), fill=theme.ACCENT,
+                               width=max(2, p(3)), capstyle="round")
+
+        # ---- 复选框
+        cb_s = p(18)
+        cb_x, cb_y = x1 + p(18), y + h / 2 - cb_s / 2
+        if checked:
+            round_rect(canvas, cb_x, cb_y, cb_x + cb_s, cb_y + cb_s,
+                       theme.small_radius(), fill=theme.ACCENT, outline="")
+            canvas.create_line(cb_x + cb_s * 0.26, cb_y + cb_s * 0.53,
+                               cb_x + cb_s * 0.44, cb_y + cb_s * 0.71,
+                               cb_x + cb_s * 0.74, cb_y + cb_s * 0.32,
+                               fill="#ffffff", width=max(2, p(2)),
+                               capstyle="round", joinstyle="round")
+        else:
+            round_rect(canvas, cb_x, cb_y, cb_x + cb_s, cb_y + cb_s,
+                       theme.small_radius(), fill=theme.CARD if theme.CLASSIC else "",
+                       outline=theme.BORDER_LIGHT,
+                       width=max(1.0, p(1.5)))
+
+        # ---- 左侧预览
+        thumb_x = cb_x + cb_s + p(14)
+        thumb_y = y + (h - theme.THUMB_SIZE) / 2
+        self._draw_preview(item, thumb_x, thumb_y)
+
+        # ---- 右侧信息
+        text_x = thumb_x + theme.THUMB_SIZE + p(16)
+        right_w = width - text_x - p(24 if style == "cards" else 20)
+        title, detail = item.info_lines()
+        kind_color = theme.KIND_COLORS.get(item.kind, theme.FG_DIM)
+        if style == "cards":
+            line1, line2, line3 = (y + h * 0.28, y + h * 0.53,
+                                   y + h * 0.76)
+        elif style == "flat":
+            line1, line2, line3 = (y + h * 0.32, y + h * 0.58,
+                                   y + h * 0.80)
+        else:
+            line1 = y + p(23)
+            line2 = y + p(43)
+            line3 = y + p(62)
+
+        # 第一行：类型徽标 + 文件名
+        badge_text = item.kind_label
+        badge_w = self.f_tiny.measure(badge_text) + p(14)
+        badge_h = p(20)
+        if theme.CLASSIC:
+            badge_fill = theme.CARD
+            badge_line = theme.BORDER_LIGHT
+            badge_fg = theme.FG
+        else:
+            badge_fill = theme.blend(kind_color, theme.PANEL, 0.16)
+            badge_line = theme.blend(kind_color, theme.PANEL, 0.34)
+            badge_fg = kind_color
+        round_rect(canvas, text_x, line1 - badge_h / 2, text_x + badge_w,
+                   line1 + badge_h / 2, theme.small_radius(), fill=badge_fill,
+                   outline=badge_line)
+        canvas.create_text(text_x + badge_w / 2, line1, text=badge_text,
+                           fill=badge_fg, font=self.f_tiny)
+        name = title.split("] ", 1)[-1]
+        name_x = text_x + badge_w + p(10)
+        canvas.create_text(name_x, line1,
+                           text=ellipsize(name, self.f_title_bold,
+                                          right_w - badge_w - p(10)),
+                           anchor="w", fill=theme.FG, font=self.f_title_bold)
+
+        # 第二行：大小 / 码率 / 时长
+        if detail:
+            canvas.create_text(text_x, line2, text=ellipsize(
+                detail, self.f_dim, right_w), anchor="w", fill=theme.FG_DIM,
+                font=self.f_dim)
+        # 第三行：URL
+        url = item.url
+        canvas.create_text(text_x, line3,
+                           text=ellipsize(url, self.f_url, right_w),
+                           anchor="w", fill=theme.FG_FAINT, font=self.f_url)
+
+        # 进度条
+        if getattr(item, "state", "") == "downloading":
+            bar_x1, bar_x2 = text_x, text_x + right_w
+            bar_h = max(4, p(4))
+            bar_y = y + h - p(8)
+            round_rect(canvas, bar_x1, bar_y, bar_x2, bar_y + bar_h, p(2),
+                       fill=theme.BORDER, outline="")
+            progress = max(0.0, min(1.0, getattr(item, "progress", 0) / 100.0))
+            if progress > 0:
+                round_rect(canvas, bar_x1, bar_y,
+                           bar_x1 + max(4, (bar_x2 - bar_x1) * progress),
+                           bar_y + bar_h, p(2), fill=theme.SUCCESS, outline="")
+        elif getattr(item, "state", "") == "done":
+            canvas.create_text(x2 - p(14), y + h / 2, text="✓ 已下载", anchor="e",
+                               fill=theme.SUCCESS, font=self.f_tiny)
+        elif getattr(item, "state", "") == "error":
+            canvas.create_text(x2 - p(14), y + h / 2,
+                               text=ellipsize(getattr(item, "message", "") or "失败",
+                                              self.f_tiny, p(160)),
+                               anchor="e", fill=theme.ERROR, font=self.f_tiny)
+
+    def _draw_preview(self, item, x: float, y: float) -> None:
+        canvas = self.canvas
+        size = theme.THUMB_SIZE
+        p = theme.px
+        kind = getattr(item, "kind", "other")
+        photo = self._thumb(item) if kind == "image" else None
+        color = theme.KIND_COLORS.get(kind, theme.FG_DIM)
+        if photo is not None:
+            # 深色卡片做底，图片居中（小图标不被拉伸）
+            round_rect(canvas, x, y, x + size, y + size, theme.small_radius(),
+                       fill=theme.THUMB_BG, outline=theme.BORDER)
+            iw, ih = photo.width(), photo.height()
+            canvas.create_image(x + (size - iw) / 2, y + (size - ih) / 2,
+                                anchor="nw", image=photo)
+            return
+        # 无图片：画深色卡片 + 类型图标 + 关键参数
+        round_rect(canvas, x, y, x + size, y + size, theme.small_radius(),
+                   fill=theme.THUMB_BG, outline=theme.BORDER)
+        cx, cy = x + size / 2, y + size / 2
+        icon, icon_color = _kind_icon(kind), color
+        k = size / 64.0
+        if kind == "audio":
+            self._draw_waveform(cx, cy - 4 * k, color, k)
+        elif kind == "video":
+            canvas.create_polygon(cx - 7 * k, cy - 12 * k, cx + 10 * k, cy - 3 * k,
+                                  cx - 7 * k, cy + 6 * k,
+                                  fill=icon_color, outline="")
+        elif kind == "stream":
+            canvas.create_text(cx, cy - 10 * k, text="流", fill=icon_color,
+                               font=(theme.FONT_FAMILY, max(8, int(11 * k)),
+                                     "bold"))
+            for i in range(3):
+                canvas.create_arc(cx - (14 + i * 4) * k, cy - (4 + i * 4) * k,
+                                  cx + (14 + i * 4) * k, cy + (4 + i * 4) * k,
+                                  start=40, extent=100, style="arc",
+                                  outline=icon_color, width=1)
+        elif kind == "image":
+            canvas.create_text(cx, cy, text=icon, fill=icon_color,
+                               font=(theme.FONT_FAMILY, max(9, int(14 * k)),
+                                     "bold"))
+        else:
+            canvas.create_text(cx, cy, text=icon, fill=icon_color,
+                               font=(theme.FONT_FAMILY, max(9, int(13 * k)),
+                                     "bold"))
+        main, sub = item.preview_lines()
+        if main:
+            canvas.create_text(cx, y + size - 16, text=main, fill=theme.FG,
+                               font=self.f_preview)
+        if sub:
+            canvas.create_text(cx, y + size - 6, text=sub, fill=theme.FG_DIM,
+                               font=self.f_tiny)
+
+    def _draw_waveform(self, cx: float, cy: float, color: str,
+                       k: float = 1.0) -> None:
+        heights = [4, 9, 14, 7, 16, 11, 5, 12, 8]
+        canvas = self.canvas
+        step = 4 * k
+        start = cx - (len(heights) * step) / 2
+        for i, h in enumerate(heights):
+            x = start + i * step
+            canvas.create_line(x, cy - h * k / 2, x, cy + h * k / 2, fill=color,
+                               width=max(2, int(2 * k)), capstyle="round")
+
+    # ------------------------------------------------------------------ 事件
+    def _row_at(self, y: int) -> Optional[int]:
+        index = int(y // theme.ROW_HEIGHT)
+        if 0 <= index < len(self.items):
+            return index
+        return None
+
+    def _on_wheel(self, event) -> None:
+        delta = -1 if event.delta > 0 else 1
+        steps = max(1, abs(event.delta) // 120)
+        self._on_wheel_delta(delta * steps * 2)
+
+    def _on_wheel_delta(self, steps: int) -> None:
+        self.canvas.yview_scroll(steps, "units")
+        self.redraw()
+
+    def _on_motion(self, event) -> None:
+        index = self._row_at(event.y)
+        if index != self._hover:
+            self._hover = index
+            self.redraw()
+            if index is None:
+                self.canvas.configure(cursor="")
+            else:
+                item = self.items[index]
+                self.canvas.configure(cursor="hand2")
+
+    def _on_leave(self, _event) -> None:
+        if self._hover is not None:
+            self._hover = None
+            self.redraw()
+
+    def _on_click(self, event) -> None:
+        index = self._row_at(event.y)
+        if index is None:
+            if not (event.state & 0x0004):
+                self._selected.clear()
+                self.redraw()
+            return
+        item = self.items[index]
+        ctrl = bool(event.state & 0x0004)
+        shift = bool(event.state & 0x0001)
+        if shift and self._selected:
+            anchor = min(self._selected)
+            lo, hi = sorted((anchor, index))
+            self._selected = set(range(lo, hi + 1))
+        elif ctrl:
+            if index in self._selected:
+                self._selected.discard(index)
+            else:
+                self._selected.add(index)
+        else:
+            if index not in self._selected:
+                self._selected = {index}
+            else:
+                self._selected = {index}
+        # 点击复选框区域或直接点击整行时都切换勾选（更符合直觉）
+        item.checked = not item.checked
+        self.redraw()
+        self._on_change()
+
+    def _on_double(self, event) -> None:
+        index = self._row_at(event.y)
+        if index is not None:
+            self._on_open(self.items[index])
+
+    def _on_right(self, event) -> None:
+        index = self._row_at(event.y)
+        if index is None:
+            return
+        if index not in self._selected:
+            self._selected = {index}
+            self.redraw()
+        self._on_context(event, self.items[index])
+
+
+def _kind_icon(kind: str) -> str:
+    return {"image": "IMG", "audio": "♪", "video": "▶", "stream": "流",
+            "other": "FILE"}.get(kind, "·")
+
+
+class PlaceholderEntry(tk.Entry):
+    """带占位提示文字的输入框。"""
+
+    def __init__(self, master, placeholder: str = "", **kwargs):
+        super().__init__(master, **kwargs)
+        self.placeholder = placeholder
+        self._showing = False
+        self.bind("<FocusIn>", self._on_focus_in)
+        self.bind("<FocusOut>", self._on_focus_out)
+        if not self.get():
+            self._show_placeholder()
+
+    def _show_placeholder(self):
+        if self.get():
+            return
+        self._showing = True
+        self.insert(0, self.placeholder)
+        self.configure(fg=theme.FG_FAINT)
+
+    def _on_focus_in(self, _e=None):
+        if self._showing:
+            self.delete(0, "end")
+            self._showing = False
+            self.configure(fg=theme.FG)
+
+    def _on_focus_out(self, _e=None):
+        if not self.get():
+            self._show_placeholder()
+
+    def value(self) -> str:
+        return "" if self._showing else self.get().strip()
+
+    def set_value(self, text: str) -> None:
+        self.delete(0, "end")
+        self._showing = False
+        self.configure(fg=theme.FG)
+        if text:
+            self.insert(0, text)
+        else:
+            self._on_focus_out()
+
+
+class SegmentedTabs(tk.Canvas):
+    """类型筛选：胶囊式分段控件（全部 / 图片 / 音频 / 视频 / 流）。"""
+
+    def __init__(self, master, options: list[tuple[str, str]],
+                 command: Callable[[str], None]):
+        try:
+            bg = master.cget("bg")
+        except tk.TclError:
+            bg = theme.BG
+        self._filter_style = theme.LAYOUT.get("filters", "segmented")
+        self._height = theme.px(
+            38 if self._filter_style == "capsule" else
+            32 if self._filter_style == "chips" else
+            30 if self._filter_style == "tabs" else 34)
+        super().__init__(master, bg=bg, highlightthickness=0, bd=0,
+                         height=self._height, takefocus=0)
+        self._command = command
+        self._segments = list(options)
+        self._current = options[0][0] if options else "all"
+        # 单独记住每个页签的原始文案：绝不能再从控件当前文本反推，
+        # 否则「全部 12」会被当成新文案，第二次刷新变成「全部 12 13」。
+        self._base_labels: dict[str, str] = {}
+        self._counts: dict[str, int] = {}
+        self._font = tkfont.Font(font=theme.FONT_SMALL)
+        self._font_active = tkfont.Font(font=(theme.FONT_FAMILY, 9, "bold"))
+        self._hover: Optional[str] = None
+        self._boxes: list[tuple[float, float, str]] = []
+        self._slide_from: Optional[tuple[float, float]] = None
+        self._slide_to: Optional[tuple[float, float]] = None
+        self._slide_t = 1.0
+        self._slide_job = None
+        for key, label in options:
+            self._base_labels[key] = label
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Destroy>", self._on_destroy, add="+")
+        self._refresh()
+
+    # ------------------------------------------------------------------ 数据
+    def select(self, key: str) -> None:
+        old = next((box for box in self._boxes if box[2] == self._current), None)
+        self._current = key
+        self._slide_t = 1.0
+        if old is not None and theme.ANIMATIONS and self._filter_style == "capsule":
+            self._slide_from = (old[0], old[1])
+            self._slide_to = None
+            self._slide_t = 0.0
+            self._start_slide()
+        self._refresh()
+        self._command(key)
+
+    # ----------------------------------------------------- 胶囊指示器滑动
+    def _start_slide(self) -> None:
+        if self._slide_job is not None:
+            try:
+                self.after_cancel(self._slide_job)
+            except tk.TclError:
+                pass
+            self._slide_job = None
+
+        def step() -> None:
+            self._slide_job = None
+            if self._slide_t >= 1.0:
+                self._refresh()
+                return
+            self._slide_t = min(1.0, self._slide_t + 0.22)
+            self._refresh()
+            try:
+                self._slide_job = self.after(16, step)
+            except tk.TclError:
+                self._slide_job = None
+
+        try:
+            self._slide_job = self.after(16, step)
+        except tk.TclError:
+            self._slide_job = None
+
+    def set_counts(self, counts: dict) -> None:
+        self._counts = dict(counts)
+        self._refresh()
+
+    def current(self) -> str:
+        return self._current
+
+    def label_of(self, key: str) -> str:
+        """返回页签当前显示的完整文本（供自检使用）。"""
+        return self._label_for(key)
+
+    def _label_for(self, key: str) -> str:
+        base = self._base_labels.get(key, key)
+        count = self._counts.get(key, 0)
+        return f"{base} {count}" if count else base
+
+    # ------------------------------------------------------------------ 绘制
+    def _refresh(self) -> None:
+        self.delete("all")
+        pad = theme.px(2)
+        self._boxes = []
+        total = pad
+        for key, _label in self._segments:
+            text = self._label_for(key)
+            font = self._font_active if key == self._current else self._font
+            width = font.measure(text) + theme.px(22)
+            total += width
+            self._boxes.append((total - width, total, key))
+        total += pad
+        self.configure(width=total)
+        h = self._height
+        style = self._filter_style
+        if style == "chips":
+            # 霓虹主题：无外框，每个页签是独立发光芯片
+            for left, right, key in self._boxes:
+                active = key == self._current
+                outline = theme.ACCENT if active else theme.BORDER
+                fill = (theme.blend(theme.ACCENT, theme.BG, 0.30) if active
+                        else (theme.ROW_HOVER if key == self._hover
+                              else theme.PANEL))
+                round_rect(self, left + 2, pad + 1, right - 2, h - pad - 1,
+                           theme.px(10), fill=fill, outline=outline,
+                           width=1)
+                font = self._font_active if active else self._font
+                color = theme.ACCENT if active else theme.FG_DIM
+                self.create_text((left + right) / 2, h / 2,
+                                 text=self._label_for(key), fill=color,
+                                 font=font)
+            return
+        if theme.CLASSIC or style == "tabs":
+            self.create_rectangle(0, 0, total, h, fill=theme.SEGMENT_BG,
+                                  outline=theme.BORDER_LIGHT)
+            self.create_line(1, 1, total - 1, 1, fill="#ffffff")
+        else:
+            outline = theme.BORDER_LIGHT if style == "capsule" else ""
+            round_rect(self, 0, 0, total, h, theme.card_radius(),
+                       fill=theme.SEGMENT_BG, outline=outline, width=1)
+            if style == "capsule":
+                self.create_line(theme.px(16), 1, total - theme.px(16), 1,
+                                 fill=theme.blend(theme.BORDER_LIGHT,
+                                                  "#ffffff", 0.35),
+                                 width=1)
+        active_box = next((b for b in self._boxes if b[2] == self._current),
+                          None)
+        if active_box is not None and self._slide_to is None:
+            self._slide_to = (active_box[0], active_box[1])
+        for left, right, key in self._boxes:
+            active = key == self._current
+            if theme.CLASSIC or style == "tabs":
+                fill = theme.SEGMENT_ACTIVE if active else theme.SEGMENT_BG
+                self.create_rectangle(left + 1, pad, right - 1, h - pad,
+                                      fill=fill, outline=theme.BORDER_LIGHT)
+                if active:
+                    self.create_line(left + 2, pad + 1, right - 2, pad + 1,
+                                     fill=theme.BORDER_LIGHT)
+                    self.create_line(left + 2, pad + 1, left + 2, h - pad - 1,
+                                     fill=theme.BORDER_LIGHT)
+            elif active:
+                pill_left, pill_right = left, right
+                if (self._slide_t < 1.0 and self._slide_from
+                        and self._slide_to):
+                    eased = 1 - (1 - self._slide_t) ** 3
+                    pill_left = (self._slide_from[0]
+                                 + (self._slide_to[0] - self._slide_from[0]) * eased)
+                    pill_right = (self._slide_from[1]
+                                  + (self._slide_to[1] - self._slide_from[1]) * eased)
+                if style == "capsule":
+                    round_rect(self, pill_left + 2, pad + 1,
+                               pill_right - 2, h - pad - 1,
+                               theme.px(15), fill=theme.ACCENT,
+                               outline=theme.blend(theme.ACCENT, "#ffffff", 0.25),
+                               width=1)
+                    self.create_line(pill_left + theme.px(12), pad + 2,
+                                     pill_right - theme.px(12), pad + 2,
+                                     fill=theme.blend(theme.ACCENT, "#ffffff", 0.55),
+                                     width=1)
+                else:
+                    round_rect(self, left + 1, pad, right - 1, h - pad,
+                               theme.button_radius(), fill=theme.SEGMENT_ACTIVE,
+                               outline="")
+            elif key == self._hover:
+                round_rect(self, left + 1, pad, right - 1, h - pad,
+                           theme.button_radius(), fill=theme.ROW_HOVER,
+                           outline="")
+            font = self._font_active if active else self._font
+            if style == "capsule" and active:
+                color = "#ffffff"
+            else:
+                color = theme.FG if active else theme.FG_DIM
+            self.create_text((left + right) / 2, h / 2,
+                             text=self._label_for(key), fill=color, font=font)
+
+    # ------------------------------------------------------------------ 交互
+    def _key_at(self, x: float) -> Optional[str]:
+        for left, right, key in self._boxes:
+            if left <= x <= right:
+                return key
+        return None
+
+    def _on_click(self, event) -> None:
+        key = self._key_at(event.x)
+        if key is not None and key != self._current:
+            self.select(key)
+
+    def _on_motion(self, event) -> None:
+        key = self._key_at(event.x)
+        if key != self._hover:
+            self._hover = key
+            self.configure(cursor="hand2" if key else "")
+            self._refresh()
+
+    def _on_leave(self, _event=None) -> None:
+        if self._hover is not None:
+            self._hover = None
+            self.configure(cursor="")
+            self._refresh()
+
+    def _on_destroy(self, event=None) -> None:
+        if event is not None and event.widget is not self:
+            return
+        if self._slide_job is not None:
+            try:
+                self.after_cancel(self._slide_job)
+            except tk.TclError:
+                pass
+            self._slide_job = None
+
+
+class SideTabs(tk.Canvas):
+    """亚克力主题的左侧竖向筛选栏（与 SegmentedTabs 同接口）。"""
+
+    def __init__(self, master, options: list[tuple[str, str]],
+                 command: Callable[[str], None], width: int = 184):
+        try:
+            bg = master.cget("bg")
+        except tk.TclError:
+            bg = theme.BG
+        self._row_h = theme.px(42)
+        super().__init__(master, bg=bg, highlightthickness=0, bd=0,
+                         width=width, height=self._row_h * len(options) + 8,
+                         takefocus=0)
+        self._command = command
+        self._segments = list(options)
+        self._base_labels = {k: v for k, v in options}
+        self._counts: dict[str, int] = {}
+        self._current = options[0][0] if options else "all"
+        self._hover: Optional[str] = None
+        self._font = tkfont.Font(font=theme.FONT_SMALL)
+        self._font_active = tkfont.Font(font=(theme.FONT_FAMILY, 10, "bold"))
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", self._on_leave)
+        self._refresh()
+
+    def select(self, key: str) -> None:
+        self._current = key
+        self._refresh()
+        self._command(key)
+
+    def set_counts(self, counts: dict) -> None:
+        self._counts = dict(counts)
+        self._refresh()
+
+    def current(self) -> str:
+        return self._current
+
+    def label_of(self, key: str) -> str:
+        base = self._base_labels.get(key, key)
+        count = self._counts.get(key, 0)
+        return f"{base} {count}" if count else base
+
+    def _row_at(self, y: float) -> Optional[str]:
+        index = int((y - 4) // self._row_h)
+        if 0 <= index < len(self._segments):
+            return self._segments[index][0]
+        return None
+
+    def _refresh(self) -> None:
+        self.delete("all")
+        p = theme.px
+        width = int(self.cget("width"))
+        for index, (key, _label) in enumerate(self._segments):
+            top = 4 + index * self._row_h
+            active = key == self._current
+            hover = key == self._hover
+            if active:
+                round_rect(self, p(4), top + p(3), width - p(4),
+                           top + self._row_h - p(3), theme.px(12),
+                           fill=theme.blend(theme.ACCENT, theme.PANEL, 0.24),
+                           outline=theme.blend(theme.ACCENT, theme.PANEL, 0.55),
+                           width=1)
+                self.create_line(p(5), top + p(12), p(5),
+                                 top + self._row_h - p(12),
+                                 fill=theme.ACCENT, width=max(2, p(3)),
+                                 capstyle="round")
+            elif hover:
+                round_rect(self, p(4), top + p(3), width - p(4),
+                           top + self._row_h - p(3), theme.px(12),
+                           fill=theme.ROW_HOVER, outline="")
+            color = theme.FG if active else theme.FG_DIM
+            font = self._font_active if active else self._font
+            self.create_text(p(18), top + self._row_h / 2,
+                             anchor="w", text=self.label_of(key),
+                             fill=color, font=font)
+            count = self._counts.get(key, 0)
+            if count:
+                self.create_text(width - p(16), top + self._row_h / 2,
+                                 anchor="e", text=str(count),
+                                 fill=theme.ACCENT if active else theme.FG_FAINT,
+                                 font=theme.FONT_TINY)
+
+    def _on_click(self, event) -> None:
+        key = self._row_at(event.y)
+        if key is not None and key != self._current:
+            self.select(key)
+
+    def _on_motion(self, event) -> None:
+        key = self._row_at(event.y)
+        if key != self._hover:
+            self._hover = key
+            self.configure(cursor="hand2" if key else "")
+            self._refresh()
+
+    def _on_leave(self, _event=None) -> None:
+        if self._hover is not None:
+            self._hover = None
+            self.configure(cursor="")
+            self._refresh()
+
+
+class DropdownButton(tk.Canvas):
+    """带下拉菜单的圆角按钮（用于 User-Agent 选择）。
+
+    Tk 原生的 OptionMenu/Menubutton 在深色主题下样式很难统一，
+    这里用 Canvas 自绘按钮 + tk.Menu 弹出选项。
+    """
+
+    def __init__(self, master, options: list[tuple[str, str]],
+                 command: Callable[[str], None], value: str = "",
+                 width: int = 150, height: int = 38, prefix: str = "",
+                 font=None):
+        try:
+            bg = master.cget("bg")
+        except tk.TclError:
+            bg = theme.PANEL
+        super().__init__(master, width=width, height=height, bg=bg,
+                         highlightthickness=0, bd=0, takefocus=1, cursor="hand2")
+        self._bw, self._bh = width, height
+        self._items = list(options)
+        self._command = command
+        self._value = value or (options[0][0] if options else "")
+        self._prefix = prefix
+        self._font = font or theme.FONT_SMALL
+        self._hovering = False
+        self._menu: tk.Menu | None = None
+        self._draw()
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self.bind("<Button-1>", lambda _e: self.open_menu())
+        self.bind("<Return>", lambda _e: self.open_menu())
+        self.bind("<space>", lambda _e: self.open_menu())
+
+    # ------------------------------------------------------------------ 外观
+    def _set_hover(self, value: bool) -> None:
+        self._hovering = value
+        self._draw()
+
+    def _label(self) -> str:
+        for key, label in self._items:
+            if key == self._value:
+                return label
+        return self._items[0][1] if self._items else ""
+
+    def _draw(self) -> None:
+        self.delete("all")
+        p = theme.px
+        fill = theme.CARD_HOVER if self._hovering else theme.CARD
+        if theme.CLASSIC:
+            self.create_rectangle(0, 0, self._bw, self._bh, fill=fill,
+                                  outline=theme.BORDER_LIGHT)
+            self.create_line(1, 1, self._bw - 1, 1, fill="#ffffff")
+            self.create_line(1, 1, 1, self._bh - 1, fill="#ffffff")
+            self.create_line(1, self._bh - 1, self._bw - 1, self._bh - 1,
+                             fill=theme.BORDER_LIGHT)
+            self.create_line(self._bw - 1, 1, self._bw - 1, self._bh - 1,
+                             fill=theme.BORDER_LIGHT)
+        else:
+            outline = theme.BORDER_LIGHT if theme.ACRYLIC else theme.BORDER
+            round_rect(self, 1, 1, self._bw - 1, self._bh - 1,
+                       theme.button_radius(), fill=fill, outline=outline)
+            if theme.GLASS:
+                self.create_line(p(12), p(2), self._bw - p(12), p(2),
+                                 fill=theme.blend(fill, "#ffffff", 0.45),
+                                 width=max(1, p(1)), capstyle="round")
+        arrow_w = p(16)
+        text_w = self._bw - p(20) - arrow_w
+        label = self._label()
+        if self._prefix:
+            label = f"{self._prefix}{label}"
+        self.create_text(p(10), self._bh / 2, anchor="w",
+                         text=ellipsize(label, tkfont.Font(font=self._font),
+                                        text_w),
+                         fill=theme.FG, font=self._font)
+        cx = self._bw - p(12)
+        cy = self._bh / 2
+        d = p(4)
+        self.create_polygon(cx - d, cy - d / 2, cx + d, cy - d / 2, cx, cy + d * 0.8,
+                            fill=theme.FG_DIM, outline="")
+
+    # ------------------------------------------------------------------ 交互
+    def open_menu(self) -> None:
+        """弹出选项菜单。"""
+        menu = tk.Menu(self, tearoff=0, bg=theme.PANEL, fg=theme.FG,
+                       activebackground=theme.ACCENT, activeforeground="#ffffff",
+                       bd=0, font=self._font)
+        for key, label in self._items:
+            menu.add_radiobutton(
+                label=label, value=key, variable=tk.StringVar(value=self._value),
+                command=lambda k=key: self.select(k))
+        self._menu = menu
+        try:
+            menu.tk_popup(self.winfo_rootx(),
+                          self.winfo_rooty() + self._bh + theme.px(2))
+        finally:
+            menu.grab_release()
+
+    def select(self, key: str) -> None:
+        if key == self._value:
+            return
+        self._value = key
+        self._draw()
+        self._command(key)
+
+    def value(self) -> str:
+        return self._value
+
+    def set_value(self, key: str) -> None:
+        self._value = key
+        self._draw()
+
+    def set_options(self, options: list[tuple[str, str]]) -> None:
+        self._items = list(options)
+        self._draw()

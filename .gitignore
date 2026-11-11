@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.log
+
+# 运行期生成
+config.json
+Download/
+screenshots/
+tests/_assets/
+tests/_cfg/
+tests/_themecfg/
+tests/_shots/
+tests/_execheck/
+rs_dl_*/
+rs_uitest_dl/
+
+# 打包 / 构建产物
+build/
+dist/
+build_tools/
+wheels/
+.venv/
+tmp/
+*.zip
+*.exe
+yt-dlp.exe
