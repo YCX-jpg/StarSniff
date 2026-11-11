@@ -360,7 +360,6 @@ class SettingsDialog(tk.Toplevel):
         self.geometry(f"{width}x{height}")
         self.resizable(False, False)
         self.transient(master)
-        self.grab_set()
 
         self._build_titlebar()
         self._build_body()
@@ -371,6 +370,10 @@ class SettingsDialog(tk.Toplevel):
         self._show_page("appearance")
         self.update_idletasks()
         self._center_on(master)
+        # 先让窗口完成映射/置前，再在下一帧抓取输入。
+        # 如果在这里立刻 grab_set()，窗口尚未显示时主界面会被 grab 住，
+        # 表现就是“点设置直接卡死”。
+        self.after(30, self._activate_window)
 
     # ------------------------------------------------------------------ 外壳
     def _build_titlebar(self) -> None:
@@ -1170,13 +1173,45 @@ class SettingsDialog(tk.Toplevel):
             pass
         self._cancel_ytdlp_job()
         self._closing = True
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
         self.destroy()
         self.on_apply(cfg)
+
+    def _activate_window(self) -> None:
+        if self._closing:
+            return
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+            self.after(40, self._grab_modal)
+        except tk.TclError:
+            pass
+
+    def _grab_modal(self, attempt: int = 0) -> None:
+        if self._closing:
+            return
+        try:
+            if not self.winfo_viewable():
+                # 窗口尚未真正显示时绝不 grab，否则主界面会被锁住
+                if attempt < 12:
+                    self.after(50, lambda: self._grab_modal(attempt + 1))
+                return
+            self.grab_set()
+        except tk.TclError:
+            pass
 
     def _close(self) -> None:
         if self._closing:
             return
         self._closing = True
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
         try:
             if self._preview_job is not None:
                 self.after_cancel(self._preview_job)

@@ -447,6 +447,14 @@ def main() -> int:
             check("设置窗口尺寸合理",
                   dlg.winfo_width() > 400 and dlg.winfo_height() > 300,
                   f"{dlg.winfo_width()}x{dlg.winfo_height()}")
+            app.open_settings()
+            app.open_settings()
+            pump(0.2)
+            toplevels2 = [w for w in app.winfo_children()
+                          if w.winfo_class() == "Toplevel"]
+            check("重复点击设置不会叠加窗口/卡死",
+                  len(toplevels2) == 1 and dlg.winfo_exists() == 1,
+                  f"{len(toplevels2)} 个设置窗口")
             check("设置窗口也是自定义标题栏",
                   bool(dlg.overrideredirect()), "overrideredirect")
             check("个性化页含全部主题预设",

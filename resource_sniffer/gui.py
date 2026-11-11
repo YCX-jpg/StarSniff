@@ -111,6 +111,7 @@ class MainWindow(tk.Tk):
         self._update_dialog = None
         self._header_job = None
         self._header_phase = 0.0
+        self._settings_dialog = None
         self._build_ui()
         self._resizer = frameless.WindowResizer(
             self, theme.px(860), theme.px(560),
@@ -1799,8 +1800,17 @@ class MainWindow(tk.Tk):
                                     and self._ytdlp_thread.is_alive()):
             self._log("嗅探进行中，请等结束后再修改设置")
             return
-        SettingsDialog(self, self.cfg, self._apply_preferences,
-                       self._save_config_silent)
+        existing = getattr(self, "_settings_dialog", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
+        self._settings_dialog = SettingsDialog(
+            self, self.cfg, self._apply_preferences,
+            self._save_config_silent)
 
     def _apply_preferences(self, _cfg: Config) -> None:
         cfgmod.save(self.cfg, self.base_dir)
