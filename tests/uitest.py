@@ -639,11 +639,16 @@ def main() -> int:
                       and app.btn_start.winfo_width() >= theme.px(80),
                       "traffic lights / cards")
             elif key == "acrylic":
+                app._apply_window_glass()
+                pump(0.1)
                 check("亚克力：左侧导航栏 + 竖向筛选",
                       hasattr(app, "sidebar")
                       and app.tabs.__class__.__name__ == "SideTabs"
                       and app.sidebar.winfo_width() > theme.px(120),
                       app.tabs.__class__.__name__)
+                check("亚克力窗口为半透明",
+                      float(app.attributes("-alpha")) < 0.999,
+                      app.attributes("-alpha"))
             elif key == "neon":
                 check("霓虹：芯片式筛选",
                       getattr(app.tabs, "_filter_style", "") == "chips",

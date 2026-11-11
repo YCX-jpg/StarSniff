@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk
@@ -20,6 +22,96 @@ def round_rect(canvas: tk.Canvas, x1, y1, x2, y2, radius=8, **kwargs):
         x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
     ]
     return canvas.create_polygon(points, smooth=True, splinesteps=12, **kwargs)
+
+
+def glass_surface(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
+                  phase: float = 0.0, mode: str = "glass",
+                  accent: str = "") -> None:
+    """绘制一块带光照的玻璃/亚克力表面。
+
+    光照模型（固定）：
+    * 主光来自左上方（天空/窗光）→ 顶边和左上角高光；
+    * 环境光在顶部 → 上明下暗的竖向渐变；
+    * 地面反光从下方进入玻璃 → 底部的折射亮带；
+    * 右下边缘处于背光 → 暗边 + 阴影。
+
+    phase 控制高光扫过位置（0~1），由列表/标题栏的动画循环推进。
+    acrylic 模式降低高光锐度、增加磨砂噪点，模拟半透明亚克力。
+    """
+    width, height = x2 - x1, y2 - y1
+    if width <= 3 or height <= 3:
+        return
+    p = theme.px
+    radius = max(0, min(radius, width // 2, height // 2))
+    round_rect(canvas, x1, y1, x2, y2, radius, fill=base, outline="")
+    inset = max(p(5), radius * 0.45)
+    bands = 24
+    top_boost = 0.12 if mode == "glass" else 0.06
+    # 用相互重叠 1px 的矩形画渐变，避免 1px 横线之间漏出底色形成扫描线
+    for index in range(bands):
+        t = index / max(1, bands - 1)
+        if t < 0.68:
+            color = theme.blend("#ffffff", base, top_boost * (1.0 - t) ** 1.8)
+        else:
+            color = theme.blend("#000000", base, (t - 0.68) * 0.24)
+        y0 = y1 + radius * 0.35 + (height - radius * 0.7) * t
+        y1_band = y0 + (height - radius * 0.7) / bands + 1
+        canvas.create_rectangle(x1 + inset, y0, x2 - inset, y1_band,
+                                fill=color, outline=color)
+    # 顶边/左边反射，右下暗边
+    canvas.create_line(x1 + radius * 0.65, y1 + p(1),
+                       x2 - radius * 0.65, y1 + p(1),
+                       fill=theme.blend("#ffffff", base, 0.58),
+                       width=max(1, p(1)), capstyle="round")
+    canvas.create_line(x1 + p(1), y1 + radius * 0.7,
+                       x1 + p(1), y2 - radius * 0.7,
+                       fill=theme.blend("#ffffff", base, 0.18),
+                       width=1)
+    canvas.create_line(x1 + radius * 0.7, y2 - p(1),
+                       x2 - radius * 0.7, y2 - p(1),
+                       fill=theme.blend("#000000", base, 0.30),
+                       width=1)
+    if mode == "glass" and height > p(28):
+        # 底部折射带：环境光从下方穿入，略带强调色
+        band_top = y1 + height * 0.58
+        band_bottom = y1 + height * 0.74
+        refracted = theme.blend(accent or theme.ACCENT, base, 0.10)
+        canvas.create_polygon(
+            x1 + inset + p(4), band_top,
+            x2 - inset - p(4), band_top - p(2),
+            x2 - inset - p(2), band_bottom,
+            x1 + inset + p(2), band_bottom + p(2),
+            fill=refracted, outline="")
+        canvas.create_line(x1 + inset + p(6), band_top,
+                           x2 - inset - p(6), band_top - p(1),
+                           fill=theme.blend("#ffffff", base, 0.22), width=1)
+        # 左上方镜面高光，随相位轻微漂移
+        sx = x1 + width * (0.24 + 0.05 * math.sin(phase * math.tau))
+        sy = y1 + height * 0.20
+        canvas.create_oval(sx - width * 0.09, sy - height * 0.055,
+                           sx + width * 0.09, sy + height * 0.055,
+                           fill=theme.blend("#ffffff", base, 0.08),
+                           outline="")
+        # 扫光：一条斜向的高光带，模拟玻璃转动时的反射
+        sweep_x = x1 - width * 0.25 + (phase % 1.0) * width * 1.5
+        canvas.create_polygon(
+            sweep_x, y1 + p(2),
+            sweep_x + width * 0.06, y1 + p(2),
+            sweep_x + width * 0.16, y2 - p(2),
+            sweep_x + width * 0.03, y2 - p(2),
+            fill=theme.blend("#ffffff", base, 0.035), outline="")
+    elif mode == "acrylic":
+        # 亚克力：顶部雾光 + 很淡的竖向光泽，没有锐利折射
+        canvas.create_rectangle(x1 + p(2), y1 + p(2),
+                                x2 - p(2), y2 - p(2),
+                                fill=theme.blend("#ffffff", base, 0.018),
+                                outline="")
+        canvas.create_polygon(
+            x1 + width * 0.10, y1 + p(2),
+            x2 - width * 0.10, y1 + p(2),
+            x2 - width * 0.22, y1 + height * 0.55,
+            x1 + width * 0.22, y1 + height * 0.55,
+            fill=theme.blend("#ffffff", base, 0.045), outline="")
 
 
 def ellipsize(text: str, font: tkfont.Font, max_width: int) -> str:
@@ -137,24 +229,21 @@ class AccentButton(tk.Canvas):
             outline = theme.blend(theme.BORDER_LIGHT, theme.BORDER, 0.6)
         x1, y1 = 1 + inset, 1 + inset
         x2, y2 = self._bw - 1 - inset, self._bh - 1 - inset
-        if outline:
+        glassy = (theme.GLASS and not theme.NEON) or theme.ACRYLIC
+        if glassy:
+            glass_surface(self, x1, y1, x2, y2, self._radius, fill,
+                          phase=(time.time() * 0.22 + self._bw * 0.01) % 1.0,
+                          mode="acrylic" if theme.ACRYLIC else "glass",
+                          accent=theme.ACCENT)
+            if outline:
+                round_rect(self, x1, y1, x2, y2, self._radius,
+                           fill="", outline=outline, width=1)
+        elif outline:
             round_rect(self, x1, y1, x2, y2, self._radius,
                        fill=fill, outline=outline, width=1)
         else:
             round_rect(self, x1, y1, x2, y2, self._radius,
                        fill=fill, outline="")
-        if theme.GLASS:
-            # 顶部一条高光 + 底部柔和阴影，模拟玻璃反光
-            self.create_line(p(10), y1 + p(1), self._bw - p(10), y1 + p(1),
-                             fill=theme.blend(fill, "#ffffff", 0.5),
-                             width=max(1, p(1)), capstyle="round")
-            self.create_line(p(12), y2 - p(1), self._bw - p(12), y2 - p(1),
-                             fill=theme.blend(fill, "#000000", 0.22),
-                             width=max(1, p(1)), capstyle="round")
-        if theme.ACRYLIC and not self._pressed:
-            self.create_line(p(12), y1 + p(1), self._bw - p(12), y1 + p(1),
-                             fill=theme.blend(fill, "#ffffff", 0.16),
-                             width=1)
         self.create_text(self._bw / 2, self._bh / 2,
                          text=self._text, fill=fg, font=self._font)
 
@@ -385,6 +474,8 @@ class ResourceList(tk.Frame):
         # 批量插入时合并重绘，避免 N 次全表刷新
         self._redraw_pending = False
         self._change_pending = False
+        self._shine_phase = 0.0
+        self._shine_job = None
         self.empty_hint = "还没有嗅探到资源\n在上方输入网址后点击「开始」"
 
         self.f_title = tkfont.Font(family=theme.FONT_FAMILY, size=10)
@@ -414,6 +505,37 @@ class ResourceList(tk.Frame):
         self.canvas.bind("<Control-a>", lambda _e: self.select_all())
         self.canvas.bind("<space>", lambda _e: self.toggle_selected())
         self.bind("<Control-a>", lambda _e: self.select_all())
+
+        if (theme.ACTIVE_PRESET in ("glass", "acrylic")
+                and theme.ANIMATIONS):
+            self.bind("<Destroy>", self._on_destroy_shine, add="+")
+            try:
+                self._shine_job = self.after(100, self._shine_tick)
+            except tk.TclError:
+                self._shine_job = None
+
+    def _shine_tick(self) -> None:
+        """列表卡片的扫光动画：只重绘可见行，约 10fps。"""
+        self._shine_job = None
+        try:
+            if not self.winfo_exists():
+                return
+            self._shine_phase = (self._shine_phase + 0.045) % 1.0
+            if self.items and self.winfo_ismapped():
+                self.redraw()
+            self._shine_job = self.after(100, self._shine_tick)
+        except tk.TclError:
+            self._shine_job = None
+
+    def _on_destroy_shine(self, event=None) -> None:
+        if event is not None and event.widget is not self:
+            return
+        if self._shine_job is not None:
+            try:
+                self.after_cancel(self._shine_job)
+            except tk.TclError:
+                pass
+            self._shine_job = None
 
     # ------------------------------------------------------------------ 数据
     def set_empty_hint(self, text: str) -> None:
@@ -752,13 +874,14 @@ class ResourceList(tk.Frame):
                 fill = theme.CARD_HOVER
             else:
                 fill = base
-            round_rect(canvas, x1, y, x2, y + h, theme.card_radius(), fill=fill,
-                       outline=theme.blend(theme.BORDER_LIGHT, fill, 0.55),
+            glass_surface(
+                canvas, x1, y, x2, y + h, theme.card_radius(), fill,
+                phase=(self._shine_phase + index * 0.11) % 1.0,
+                mode="acrylic" if theme.ACRYLIC else "glass",
+                accent=theme.ACCENT)
+            round_rect(canvas, x1, y, x2, y + h, theme.card_radius(),
+                       fill="", outline=theme.blend(theme.BORDER_LIGHT, fill, 0.55),
                        width=1)
-            # 液态玻璃的顶部反光
-            canvas.create_line(x1 + p(18), y + 1, x2 - p(18), y + 1,
-                               fill=theme.blend(fill, "#ffffff", 0.28),
-                               width=1)
         elif style == "flat":
             fill = (theme.SELECTED_ROW if checked else
                     theme.ROW_HOVER if (selected or hovered) else theme.PANEL)
@@ -780,6 +903,15 @@ class ResourceList(tk.Frame):
                 fill = theme.PANEL
             round_rect(canvas, x1, y, x2, y + h, theme.card_radius(), fill=fill,
                        outline="")
+            if theme.ACRYLIC:
+                # 磨砂纹理，让行表面像半透明亚克力而不是纯色块
+                try:
+                    canvas.create_rectangle(
+                        x1 + p(2), y + p(2), x2 - p(2), y + h - p(2),
+                        fill=theme.blend("#ffffff", fill, 0.035),
+                        stipple="gray12", outline="")
+                except tk.TclError:
+                    pass
             if checked or selected:
                 canvas.create_line(x1 + p(10), y + p(14), x1 + p(10),
                                    y + h - p(14), fill=theme.ACCENT,
@@ -1203,15 +1335,16 @@ class SegmentedTabs(tk.Canvas):
             self.create_rectangle(0, 0, total, h, fill=theme.SEGMENT_BG,
                                   outline=theme.BORDER_LIGHT)
             self.create_line(1, 1, total - 1, 1, fill="#ffffff")
-        else:
-            outline = theme.BORDER_LIGHT if style == "capsule" else ""
+        elif style == "capsule":
+            glass_surface(self, 0, 0, total, h, theme.card_radius(),
+                          theme.SEGMENT_BG,
+                          phase=(time.time() * 0.12) % 1.0,
+                          mode="glass", accent=theme.ACCENT)
             round_rect(self, 0, 0, total, h, theme.card_radius(),
-                       fill=theme.SEGMENT_BG, outline=outline, width=1)
-            if style == "capsule":
-                self.create_line(theme.px(16), 1, total - theme.px(16), 1,
-                                 fill=theme.blend(theme.BORDER_LIGHT,
-                                                  "#ffffff", 0.35),
-                                 width=1)
+                       fill="", outline=theme.BORDER_LIGHT, width=1)
+        else:
+            round_rect(self, 0, 0, total, h, theme.card_radius(),
+                       fill=theme.SEGMENT_BG, outline="", width=1)
         active_box = next((b for b in self._boxes if b[2] == self._current),
                           None)
         if active_box is not None and self._slide_to is None:

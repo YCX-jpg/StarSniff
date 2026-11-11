@@ -36,6 +36,16 @@ TITLE_BG = BG
 TITLE_FG = FG
 TITLE_SUB = FG_FAINT
 
+# 固定光照模型（所有玻璃控件共用，避免每个组件各画一套光）：
+# * 主光来自左上：(-0.55, -0.83)，顶边/左上角最亮；
+# * 环境光从顶部进入：上明下暗；
+# * 地面反光从下方进入：底部折射带；
+# * 右下背光：暗边 + 投影。
+LIGHT_KEY_DIR = (-0.55, -0.83)
+LIGHT_TOP = "#ffffff"
+LIGHT_GROUND = "#ffffff"
+LIGHT_SHADOW = "#000000"
+
 KIND_COLORS = {
     "image": "#38bdf8",
     "audio": "#a78bfa",

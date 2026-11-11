@@ -109,11 +109,14 @@ class MainWindow(tk.Tk):
         self._update_info = None
         self._update_job = None
         self._update_dialog = None
+        self._header_job = None
+        self._header_phase = 0.0
         self._build_ui()
         self._resizer = frameless.WindowResizer(
             self, theme.px(860), theme.px(560),
             is_maximized=lambda: self._maximized)
         self._apply_window_radius()
+        self.after(300, self._apply_window_glass)
         self.bind("<Alt-F4>", lambda _e: self._on_close())
         self.bind("<Control-a>", self._on_select_all_key)
         self.bind("<Control-A>", self._on_select_all_key)
@@ -223,7 +226,8 @@ class MainWindow(tk.Tk):
         """
         self._layout = dict(theme.LAYOUT)
         # 重建界面时旧控件的引用必须清掉，否则 _update_counts 会操作已销毁的标签
-        for attr in ("side_stats", "sidebar", "menubar", "traffic_lights"):
+        for attr in ("side_stats", "sidebar", "menubar", "traffic_lights",
+                     "_header_glass"):
             setattr(self, attr, None)
         self._shell = tk.Frame(self, bg=theme.BG)
         self._shell.pack(fill="both", expand=True)
@@ -387,6 +391,15 @@ class MainWindow(tk.Tk):
         bar.pack(fill="x", side="top")
         bar.pack_propagate(False)
         self._titlebar = bar
+        # 标题栏的玻璃底层：顶部天空反光 + 缓慢扫过的环境高光
+        self._header_glass = tk.Canvas(bar, bg=theme.TITLE_BG,
+                                       highlightthickness=0, bd=0)
+        self._header_glass.place(x=0, y=0, relwidth=1, relheight=1)
+        self._header_glass.bind("<Configure>",
+                                lambda _e: self._draw_header_glass())
+        self._draw_header_glass()
+        if theme.ANIMATIONS:
+            self._header_job = self.after(80, self._header_light_tick)
         lights = frameless.TrafficLights(
             bar, self._on_close, self._minimize, self._toggle_maximize,
             bg=theme.TITLE_BG)
@@ -411,6 +424,52 @@ class MainWindow(tk.Tk):
         spacer.pack(side="right")
         self._bind_title_region(bar, center, icon, title, self.subtitle)
         tk.Frame(parent, bg=theme.BORDER, height=1).pack(fill="x")
+
+    def _draw_header_glass(self) -> None:
+        canvas = getattr(self, "_header_glass", None)
+        if canvas is None:
+            return
+        try:
+            if not canvas.winfo_exists():
+                return
+            width = max(canvas.winfo_width(), 200)
+            height = max(canvas.winfo_height(), theme.px(40))
+            canvas.delete("all")
+            # 天空光从左上进入：顶部偏冷亮，向下过渡回标题栏底色
+            bands = 18
+            for index in range(bands):
+                t = index / (bands - 1)
+                sky = theme.blend(theme.ACCENT, "#ffffff", 0.45)
+                color = theme.blend(
+                    sky, theme.TITLE_BG, 0.14 * (1.0 - t) ** 1.7)
+                y0 = height * t
+                canvas.create_rectangle(0, y0, width, y0 + height / bands + 1,
+                                        fill=color, outline=color)
+            canvas.create_line(theme.px(24), 1, width - theme.px(24), 1,
+                               fill=theme.blend("#ffffff", theme.TITLE_BG, 0.34),
+                               width=1)
+            # 环境反射带：从左向右缓慢扫过
+            sheen_x = -width * 0.25 + (self._header_phase % 1.0) * width * 1.5
+            canvas.create_polygon(
+                sheen_x, 0,
+                sheen_x + width * 0.12, 0,
+                sheen_x + width * 0.24, height,
+                sheen_x + width * 0.08, height,
+                fill=theme.blend("#ffffff", theme.TITLE_BG, 0.025),
+                outline="")
+        except tk.TclError:
+            pass
+
+    def _header_light_tick(self) -> None:
+        self._header_job = None
+        try:
+            if self._closing or not self.winfo_exists():
+                return
+            self._header_phase = (self._header_phase + 0.014) % 1.0
+            self._draw_header_glass()
+            self._header_job = self.after(80, self._header_light_tick)
+        except tk.TclError:
+            self._header_job = None
 
     # ---- 霓虹：极简细顶栏 + 主色细线 ----
     def _build_neon_header(self, parent) -> None:
@@ -625,6 +684,16 @@ class MainWindow(tk.Tk):
         shine = tk.Frame(capsule, bg=theme.blend(theme.CARD, "#ffffff", 0.18),
                          height=1)
         shine.place(x=theme.px(24), y=0, relwidth=0.55)
+        # 胶囊是厚玻璃：底部出现一条来自地面反光的折射亮带
+        refract = tk.Canvas(capsule, bg=theme.CARD, height=theme.px(3),
+                            highlightthickness=0, bd=0)
+        refract.place(relx=0, rely=1.0, anchor="sw", relwidth=1.0)
+        refract.create_line(0, 0, 4000, 0,
+                            fill=theme.blend(theme.ACCENT, theme.CARD, 0.45),
+                            width=max(1, theme.px(1)))
+        refract.create_line(theme.px(60), 1, 4000, 1,
+                            fill=theme.blend("#ffffff", theme.CARD, 0.18),
+                            width=1)
 
         row = tk.Frame(hero, bg=theme.BG)
         row.pack(fill="x", pady=(theme.px(10), 0))
@@ -1764,6 +1833,12 @@ class MainWindow(tk.Tk):
         status_text = (str(self.status_label.cget("text"))
                        if hasattr(self, "status_label") else "")
         maximized = self._maximized
+        if self._header_job is not None:
+            try:
+                self.after_cancel(self._header_job)
+            except tk.TclError:
+                pass
+            self._header_job = None
         for child in list(self.winfo_children()):
             try:
                 child.destroy()
@@ -1789,6 +1864,7 @@ class MainWindow(tk.Tk):
         self._update_counts()
         self._on_max_state(maximized)
         self._sync_download_button()
+        self.after(300, self._apply_window_glass)
         if (self._update_info is not None
                 and self._update_info.is_newer_than()
                 and (self.cfg.skipped_version or "").lstrip("vV")
@@ -1800,6 +1876,24 @@ class MainWindow(tk.Tk):
         try:
             frameless.apply_window_radius(self, radius, theme.BG, theme.BORDER)
         except Exception:
+            pass
+
+    def _apply_window_glass(self) -> None:
+        """亚克力主题：开启 Windows 真模糊 + 半透明窗口。
+
+        液态玻璃保持不透明窗口，只在控件内部绘制反射/折射，避免桌面
+        内容干扰“光从左上角来”的固定光照模型。
+        """
+        if self._closing:
+            return
+        try:
+            if theme.ACRYLIC:
+                self.attributes("-alpha", 0.975)
+                frameless.enable_acrylic(self, True, 0xCC20150b)
+            else:
+                self.attributes("-alpha", 1.0)
+                frameless.enable_acrylic(self, False)
+        except tk.TclError:
             pass
 
     def show_help(self) -> None:
@@ -1840,7 +1934,7 @@ class MainWindow(tk.Tk):
             self.downloader.stop()
         except Exception:
             pass
-        for attr in ("_pump_job", "_update_job"):
+        for attr in ("_pump_job", "_update_job", "_header_job"):
             try:
                 job = getattr(self, attr, None)
                 if job is not None:
@@ -1848,6 +1942,11 @@ class MainWindow(tk.Tk):
                     setattr(self, attr, None)
             except tk.TclError:
                 pass
+        try:
+            self.attributes("-alpha", 1.0)
+            frameless.enable_acrylic(self, False)
+        except tk.TclError:
+            pass
         self.destroy()
 
 

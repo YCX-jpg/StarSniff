@@ -69,6 +69,50 @@ def apply_taskbar_style(window) -> None:
         pass
 
 
+def enable_acrylic(window, enabled: bool = True,
+                   tint: int = 0x9920150b) -> None:
+    """开启/关闭 Windows 10 的亚克力模糊背景。
+
+    配合 Tk 的 ``-alpha`` 使用，窗口整体变成真正半透明并带桌面模糊；
+    系统不支持（或被禁用 DWM）时静默失败，界面仍有磨砂渐变兜底。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ACCENTPOLICY(ctypes.Structure):
+            _fields_ = [("AccentState", ctypes.c_int),
+                        ("AccentFlags", ctypes.c_int),
+                        ("GradientColor", ctypes.c_uint),
+                        ("AnimationId", ctypes.c_int)]
+
+        class WINDOWCOMPOSITIONATTRIBDATA(ctypes.Structure):
+            _fields_ = [("Attribute", ctypes.c_int),
+                        ("Data", ctypes.c_void_p),
+                        ("SizeOfData", ctypes.c_size_t)]
+
+        hwnd = _hwnd(window)
+        if not hwnd:
+            return
+        policy = ACCENTPOLICY()
+        policy.AccentState = 4 if enabled else 0   # ACCENT_ENABLE_ACRYLICBLURBEHIND
+        policy.AccentFlags = 2
+        policy.GradientColor = tint if enabled else 0
+        policy.AnimationId = 0
+        data = WINDOWCOMPOSITIONATTRIBDATA()
+        data.Attribute = 19                       # WCA_ACCENT_POLICY
+        data.Data = ctypes.cast(ctypes.pointer(policy), ctypes.c_void_p)
+        data.SizeOfData = ctypes.sizeof(policy)
+        setter = getattr(ctypes.windll.user32, "SetWindowCompositionAttribute",
+                         None)
+        if setter:
+            setter(wintypes.HWND(hwnd), ctypes.byref(data))
+    except Exception:
+        pass
+
+
 def minimize(window) -> None:
     if os.name == "nt":
         try:
