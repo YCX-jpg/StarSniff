@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import _tkinter
 import importlib.util
 import os
 import sys
@@ -23,6 +24,7 @@ import shutil  # noqa: E402
 shutil.rmtree(CFG_DIR, ignore_errors=True)
 
 from resource_sniffer import theme  # noqa: E402
+from resource_sniffer import config as cfgmod  # noqa: E402
 
 PASS, FAIL = [], []
 def _free_port() -> int:
@@ -94,17 +96,30 @@ def main() -> int:
 
     app = MainWindow()
     app.geometry("1100x740+40+30")
-    app.update()
-    # 截图写到测试自己的临时目录，避免污染项目根目录
-    shots = os.path.join(HERE, "_shots")
-    os.makedirs(shots, exist_ok=True)
+
+    def pump_once(budget_ms: float = 8.0) -> None:
+        """处理一小段时间的事件。
+
+        直接调用 app.update() 时，只要还有下一帧动画定时器，Tk 就会一直处理
+        事件不返回；这里先跑完布局（idle），再给事件一个时间预算。
+        """
+        app.update_idletasks()
+        end = time.time() + budget_ms / 1000.0
+        while time.time() < end:
+            if not app.tk.dooneevent(_tkinter.ALL_EVENTS | _tkinter.DONT_WAIT):
+                break
 
     def pump(seconds: float = 0.3):
         end = time.time() + seconds
         while time.time() < end:
             app.update_idletasks()
-            app.update()
-            time.sleep(0.02)
+            pump_once()
+            time.sleep(0.01)
+
+    pump(0.45)
+    # 截图写到测试自己的临时目录，避免污染项目根目录
+    shots = os.path.join(HERE, "_shots")
+    os.makedirs(shots, exist_ok=True)
 
     try:
         print("\n== A. 启动与布局 ==")
@@ -172,7 +187,7 @@ def main() -> int:
         app.cfg.window_geometry = saved_size
         app._restore_geometry()
         app.update_idletasks()
-        app.update()
+        pump_once()
         restored = app.geometry()
         parsed = app._parse_geometry(restored)
         check("恢复上次窗口大小和位置",
@@ -185,7 +200,7 @@ def main() -> int:
               app._parse_geometry(app.cfg.window_geometry) is not None,
               app.cfg.window_geometry)
         app.geometry(original_geometry)
-        app.update()
+        pump_once()
 
         print("\n== A4. 自定义标题栏（无边框窗口） ==")
         check("主窗口使用自定义标题栏（无系统边框）",
@@ -201,11 +216,11 @@ def main() -> int:
         before = app.geometry()
         app._toggle_maximize()
         app.update_idletasks()
-        app.update()
+        pump_once()
         check("最大化按钮生效", bool(app._maximized), app.geometry())
         app._toggle_maximize()
         app.update_idletasks()
-        app.update()
+        pump_once()
         check("再次点击还原窗口",
               not app._maximized and app.geometry() == before,
               f"{app.geometry()} / {before}")
@@ -214,7 +229,7 @@ def main() -> int:
         app._title_press(_Ev(x0 + 300, y0 + 20))
         app._title_drag(_Ev(x0 + 340, y0 + 50))
         app.update_idletasks()
-        app.update()
+        pump_once()
         moved = (app.winfo_x(), app.winfo_y()) == (x0 + 40, y0 + 30)
         check("拖动标题栏可移动窗口", moved,
               f"({x0},{y0}) -> ({app.winfo_x()},{app.winfo_y()})")
@@ -223,17 +238,17 @@ def main() -> int:
         app._resizer._on_press("se", _Ev(x0 + w0, y0 + h0))
         app._resizer._on_motion(_Ev(x0 + w0 + 80, y0 + h0 + 60))
         app.update_idletasks()
-        app.update()
+        pump_once()
         check("拖动右下角可缩放窗口",
               app.winfo_width() > w0 and app.winfo_height() > h0,
               f"{w0}x{h0} -> {app.winfo_width()}x{app.winfo_height()}")
         app._resizer._on_release()
         app.geometry(before)
-        app.update()
+        pump_once()
 
         print("\n== B. 空状态 ==")
         app.update_idletasks()
-        app.update()
+        pump_once()
         from PIL import ImageGrab
 
         import tkinter as tk
@@ -243,10 +258,10 @@ def main() -> int:
 
         def grab(name):
             app.update_idletasks()
-            app.update()
+            pump_once()
             app.lift()
             app.attributes("-topmost", True)
-            app.update()
+            pump_once()
             x, y = probe.winfo_rootx(), probe.winfo_rooty()
             w, h = app.winfo_width(), app.winfo_height()
             path = os.path.join(shots, name)
@@ -659,9 +674,12 @@ def main() -> int:
                       and layout.get("list") == "cards"
                       and app.btn_start.winfo_width() >= theme.px(80),
                       "traffic lights / cards")
-                check("液态玻璃窗口保留透光",
-                      float(app.attributes("-alpha")) < 0.999,
-                      app.attributes("-alpha"))
+                check("液态玻璃窗口为浅色不透明（深色文字可读）",
+                      float(app.attributes("-alpha")) >= 0.999
+                      and theme.luma(theme.BG) > 0.45
+                      and theme.luma(theme.FG) < 0.35,
+                      f"alpha={app.attributes('-alpha')} "
+                      f"bg={theme.BG} fg={theme.FG}")
             elif key == "acrylic":
                 app._apply_window_glass()
                 pump(0.1)
@@ -686,6 +704,58 @@ def main() -> int:
         app.cfg.theme_preset = "default"
         app._apply_preferences(app.cfg)
         pump(0.2)
+
+        print("\n== K2. 动画帧率（5–120 FPS） ==")
+        for fps, expect in ((5, 200), (30, 33), (60, 17), (120, 8)):
+            app.cfg.anim_fps = fps
+            app._apply_preferences(app.cfg)
+            pump(0.05)
+            delay = theme.frame_delay()
+            check(f"{fps} FPS 对应约 {expect}ms 帧间隔",
+                  abs(delay - expect) <= 1 and theme.ANIM_FPS == fps,
+                  f"delay={delay}ms anim={theme.ANIM_FPS}")
+        app.cfg.anim_fps = 900
+        app._apply_preferences(app.cfg)
+        pump(0.05)
+        check("帧率上限被夹到 120", theme.ANIM_FPS == 120, str(theme.ANIM_FPS))
+        app.cfg.anim_fps = 1
+        app._apply_preferences(app.cfg)
+        pump(0.05)
+        check("帧率下限被夹到 5", theme.ANIM_FPS == 5, str(theme.ANIM_FPS))
+        check("配置保存后帧率仍被夹紧",
+              cfgmod.Config.from_dict({"anim_fps": 400}).anim_fps == 120
+              and cfgmod.Config.from_dict({"anim_fps": 3}).anim_fps == 5,
+              "clamp")
+        app.cfg.anim_fps = 60
+        app._apply_preferences(app.cfg)
+        pump(0.05)
+        app.cfg.theme_preset = "glass"
+        app._apply_preferences(app.cfg)
+        pump(0.2)
+        check("列表扫光动画已启动",
+              app.list_view._shine_job is not None,
+              str(app.list_view._shine_job))
+        app.cfg.theme_preset = "default"
+        app._apply_preferences(app.cfg)
+        pump(0.2)
+
+        print("\n== K3. 每套主题自己的壁纸 ==")
+        for key in theme.PRESET_KEYS:
+            spec = theme.WALLPAPERS.get(key)
+            check(f"{key} 有壁纸（渐变 + 柔光斑）",
+                  bool(spec and spec.get("blobs")
+                       and spec.get("top") and spec.get("bottom")),
+                  f"{len(spec.get('blobs', ())) if spec else 0} blobs")
+            samples = {theme.wallpaper_color_at(spec, 0.5, v)
+                       for v in (0.05, 0.5, 0.95)}
+            check(f"{key} 壁纸从上到下渐变", len(samples) == 3,
+                  " / ".join(sorted(samples)))
+        check("不同主题的壁纸配色不同",
+              len({theme.WALLPAPERS[k]["top"] for k in theme.PRESET_KEYS})
+              == len(theme.PRESET_KEYS), "top colors")
+        check("液态玻璃壁纸是浅色",
+              theme.luma(theme.WALLPAPERS["glass"]["base"]) > 0.6,
+              theme.WALLPAPERS["glass"]["base"])
 
         print("\n== L. 更新检查不阻塞界面 ==")
         from resource_sniffer import updater

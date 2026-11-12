@@ -20,6 +20,7 @@ _INT_RANGES = {
     "workers": (1, 32),
     "concurrency": (1, 8),
     "download_segments": (1, 8),
+    "anim_fps": (5, 120),
     "min_image_side": (0, 8192),
     "radius_button": (0, 28),
     "radius_window": (0, 30),
@@ -120,6 +121,7 @@ class Config:
     radius_button: int = 10            # 按钮圆角（96 DPI 基准）
     radius_window: int = 0             # 窗口圆角（96 DPI 基准）
     animations: bool = True            # 悬停/主题切换动画
+    anim_fps: int = 60                 # 动画帧率（5–120 FPS）
     use_ytdlp: bool = True             # 优先尝试 yt-dlp（若已安装）
     check_updates: bool = True         # 启动时检查 GitHub Release
     skipped_version: str = ""          # 用户选择跳过的版本
@@ -153,6 +155,7 @@ class Config:
             "radius_button": self.radius_button,
             "radius_window": self.radius_window,
             "animations": self.animations,
+            "anim_fps": self.anim_fps,
             "use_ytdlp": self.use_ytdlp,
             "check_updates": self.check_updates,
             "skipped_version": self.skipped_version,
@@ -212,7 +215,8 @@ def load(base_dir: str) -> Config:
     path = config_path(base_dir)
     cfg = Config()
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        # utf-8-sig：兼容记事本等编辑器可能写入的 BOM
+        with open(path, "r", encoding="utf-8-sig") as fh:
             cfg = Config.from_dict(json.load(fh))
     except (OSError, ValueError):
         cfg = Config()

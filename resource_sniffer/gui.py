@@ -44,7 +44,8 @@ from .net import normalize_url
 from . import ytdlp
 from .prefs import SettingsDialog
 from .widgets import (AccentButton, DropdownButton, PlaceholderEntry,
-                      ResourceList, SegmentedTabs, SideTabs, ellipsize)
+                      ResourceList, SegmentedTabs, SideTabs, ellipsize,
+                      glass_surface, paint_wallpaper, round_rect, soft_beam)
 
 
 class MainWindow(tk.Tk):
@@ -69,12 +70,14 @@ class MainWindow(tk.Tk):
         # 先应用视觉预设，再按 DPI 放大度量并构建界面
         theme.apply_style(self.cfg.theme_preset, self.cfg.accent,
                           self.cfg.radius_button, self.cfg.radius_window,
-                          self.cfg.animations)
+                          self.cfg.animations, self.cfg.anim_fps)
         self._scale = theme.apply_scale(self)
         self._apply_geometry_scale()
 
         self.title("StarSniff 星嗅")
         self.configure(bg=theme.BG)
+        # 动画要跑到 30–120 FPS，必须先把系统定时器精度提到 1ms
+        theme.begin_timer_resolution()
         self._set_window_icon()
         # 缩略图按当前 DPI 生成，避免高分屏发虚
         mediainfo.THUMBNAIL_SIDE = theme.THUMB_SIZE
@@ -228,7 +231,8 @@ class MainWindow(tk.Tk):
         self._layout = dict(theme.LAYOUT)
         # 重建界面时旧控件的引用必须清掉，否则 _update_counts 会操作已销毁的标签
         for attr in ("side_stats", "sidebar", "menubar", "traffic_lights",
-                     "_header_glass"):
+                     "_header_glass", "_hero_glass", "_glass_body",
+                     "_capsule_item"):
             setattr(self, attr, None)
         self._shell = tk.Frame(self, bg=theme.BG)
         self._shell.pack(fill="both", expand=True)
@@ -400,7 +404,8 @@ class MainWindow(tk.Tk):
                                 lambda _e: self._draw_header_glass())
         self._draw_header_glass()
         if theme.ANIMATIONS:
-            self._header_job = self.after(80, self._header_light_tick)
+            self._header_job = self.after(theme.frame_delay(),
+                                          self._header_light_tick)
         lights = frameless.TrafficLights(
             bar, self._on_close, self._minimize, self._toggle_maximize,
             bg=theme.TITLE_BG)
@@ -436,28 +441,47 @@ class MainWindow(tk.Tk):
             width = max(canvas.winfo_width(), 200)
             height = max(canvas.winfo_height(), theme.px(40))
             canvas.delete("all")
-            # 天空光从左上进入：顶部偏冷亮，向下过渡回标题栏底色
-            bands = 18
+            base = theme.TITLE_BG
+            # 浅色玻璃：顶部一层天空光，向下回到很淡的底色
+            bands = 12
+            sky = theme.blend(theme.ACCENT, "#ffffff", 0.24)
             for index in range(bands):
                 t = index / (bands - 1)
-                sky = theme.blend(theme.ACCENT, "#ffffff", 0.45)
-                color = theme.blend(
-                    sky, theme.TITLE_BG, 0.14 * (1.0 - t) ** 1.7)
+                color = theme.blend(sky, base, 0.10 * (1.0 - t) ** 1.6)
                 y0 = height * t
                 canvas.create_rectangle(0, y0, width, y0 + height / bands + 1,
                                         fill=color, outline=color)
             canvas.create_line(theme.px(24), 1, width - theme.px(24), 1,
-                               fill=theme.blend("#ffffff", theme.TITLE_BG, 0.34),
+                               fill=theme.blend("#ffffff", base, 0.92),
                                width=1)
-            # 环境反射带：从左向右缓慢扫过
-            sheen_x = -width * 0.25 + (self._header_phase % 1.0) * width * 1.5
-            canvas.create_polygon(
-                sheen_x, 0,
-                sheen_x + width * 0.12, 0,
-                sheen_x + width * 0.24, height,
-                sheen_x + width * 0.08, height,
-                fill=theme.blend("#ffffff", theme.TITLE_BG, 0.025),
-                outline="")
+            canvas.create_line(0, height - 1, width, height - 1,
+                               fill=theme.blend("#7f93ad", base, 0.16),
+                               width=1)
+            self._draw_header_sheen()
+        except tk.TclError:
+            pass
+
+    def _draw_header_sheen(self) -> None:
+        """标题栏上缓缓飘过的彩色环境光（每帧只重画这一层）。"""
+        canvas = getattr(self, "_header_glass", None)
+        if canvas is None:
+            return
+        try:
+            width = max(canvas.winfo_width(), 200)
+            height = max(canvas.winfo_height(), theme.px(40))
+            canvas.delete("sheen")
+            base = theme.TITLE_BG
+            # 两团完全不同步的柔光：颜色在强调色 / 雾蓝 / 淡紫 / 浅粉间流动
+            for offset in (0.0, 0.45):
+                phase = (self._header_phase + offset) % 1.0
+                center = -width * 0.15 + phase * width * 1.3
+                soft_beam(canvas, 0, 0, width, height, center, width * 0.16,
+                          base, theme.aurora_color(phase + offset),
+                          0.10, ("sheen",), strips=14)
+            # 一道更窄的白色反光，让玻璃有“湿度”
+            sheen_x = -width * 0.3 + (self._header_phase % 1.0) * width * 1.6
+            soft_beam(canvas, 0, 0, width, height, sheen_x, width * 0.05,
+                      base, "#ffffff", 0.35, ("sheen",), strips=6)
         except tk.TclError:
             pass
 
@@ -466,9 +490,11 @@ class MainWindow(tk.Tk):
         try:
             if self._closing or not self.winfo_exists():
                 return
-            self._header_phase = (self._header_phase + 0.014) % 1.0
-            self._draw_header_glass()
-            self._header_job = self.after(80, self._header_light_tick)
+            delay = theme.frame_delay()
+            self._header_phase = (self._header_phase
+                                  + 0.25 * delay / 1000.0) % 1.0
+            self._draw_header_sheen()
+            self._header_job = self.after(delay, self._header_light_tick)
         except tk.TclError:
             self._header_job = None
 
@@ -666,49 +692,77 @@ class MainWindow(tk.Tk):
         self._make_toggles(inner).pack(side="left", padx=(theme.px(10), 0))
 
     def _build_glass_search(self, parent) -> None:
-        """Apple 风格：大号胶囊输入框，主按钮嵌在胶囊内部。"""
+        """Apple 风格：大号胶囊输入框浮在壁纸上，主按钮嵌在胶囊内部。"""
         pad = theme.px(int(self._layout.get("search_pad", 26)))
         height = theme.px(int(self._layout.get("search_height", 48)))
-        hero = tk.Frame(parent, bg=theme.BG)
-        hero.pack(fill="x", padx=pad, pady=(theme.px(22), theme.px(8)))
+        gap = theme.px(52)
+        hero = tk.Canvas(parent, bg=theme.BG, height=height + gap * 2,
+                         highlightthickness=0, bd=0)
+        hero.pack(fill="x")
+        self._hero_glass = hero
+        self._hero_pad = (pad, gap)
+        hero.bind("<Configure>", lambda _e: self._layout_glass_hero())
 
         capsule = tk.Frame(hero, bg=theme.CARD, highlightthickness=1,
                            highlightbackground=theme.BORDER_LIGHT,
                            highlightcolor=theme.ACCENT)
-        capsule.pack(fill="x")
+        self._capsule = capsule
         field = self._make_url_field(capsule, height)
         field.pack(side="left", fill="x", expand=True, padx=(0, 0))
         field.configure(highlightthickness=0)
         self._url_border = capsule
         btn = self._make_start_button(capsule, inside=True)
         btn.pack(side="right", padx=theme.px(5), pady=theme.px(5))
-        shine = tk.Frame(capsule, bg=theme.blend(theme.CARD, "#ffffff", 0.18),
+        # 胶囊顶部一道亮边 + 底部一条折射色带（浅色玻璃的“厚度”）
+        shine = tk.Frame(capsule, bg=theme.blend("#ffffff", theme.CARD, 0.95),
                          height=1)
-        shine.place(x=theme.px(24), y=0, relwidth=0.55)
-        # 胶囊是厚玻璃：底部出现一条来自地面反光的折射亮带
+        shine.place(x=theme.px(26), y=0, relwidth=0.5)
         refract = tk.Canvas(capsule, bg=theme.CARD, height=theme.px(3),
                             highlightthickness=0, bd=0)
         refract.place(relx=0, rely=1.0, anchor="sw", relwidth=1.0)
         refract.create_line(0, 0, 4000, 0,
-                            fill=theme.blend(theme.ACCENT, theme.CARD, 0.45),
+                            fill=theme.blend(theme.ACCENT, theme.CARD, 0.30),
                             width=max(1, theme.px(1)))
-        refract.create_line(theme.px(60), 1, 4000, 1,
-                            fill=theme.blend("#ffffff", theme.CARD, 0.18),
+        refract.create_line(0, 1, 4000, 1,
+                            fill=theme.blend("#ffffff", theme.CARD, 0.60),
                             width=1)
         # 胶囊左右边缘：左上受光亮边、右下背光暗边
         left_edge = tk.Frame(capsule, width=theme.px(1),
-                             bg=theme.blend("#ffffff", theme.CARD, 0.20))
+                             bg=theme.blend("#ffffff", theme.CARD, 0.85))
         left_edge.place(x=0, y=0, relheight=1.0)
         right_edge = tk.Frame(capsule, width=theme.px(1),
-                              bg=theme.blend("#000000", theme.CARD, 0.28))
+                              bg=theme.blend("#000000", theme.CARD, 0.10))
         right_edge.place(relx=1.0, x=-theme.px(1), y=0, relheight=1.0)
 
-        row = tk.Frame(hero, bg=theme.BG)
-        row.pack(fill="x", pady=(theme.px(10), 0))
+        self._capsule_item = hero.create_window(
+            pad, gap, anchor="nw", window=capsule,
+            width=max(200, theme.px(420)), height=height)
+
+        row = tk.Frame(parent, bg=theme.BG)
+        row.pack(fill="x", padx=pad, pady=(theme.px(4), theme.px(8)))
         self._make_ua(row, theme.px(32)).pack(side="left")
         self._make_toggles(row).pack(side="left", padx=(theme.px(10), 0))
         tk.Label(row, text="粘贴链接，剩下的交给星嗅", bg=theme.BG,
                  fg=theme.FG_FAINT, font=theme.FONT_TINY).pack(side="right")
+
+    def _layout_glass_hero(self) -> None:
+        """把胶囊拉伸到可用宽度，并重画它背后的壁纸。"""
+        hero = getattr(self, "_hero_glass", None)
+        item = getattr(self, "_capsule_item", None)
+        if hero is None or item is None:
+            return
+        try:
+            width = hero.winfo_width()
+            if width <= 1:
+                return
+            pad, gap = self._hero_pad
+            height = theme.px(int(self._layout.get("search_height", 48)))
+            hero.coords(item, pad, gap)
+            hero.itemconfigure(item, width=max(200, width - pad * 2),
+                               height=height)
+            self._paint_wallpaper_canvas(hero, fade=True)
+        except tk.TclError:
+            pass
 
     def _draw_search_icon(self, color: str) -> None:
         canvas = getattr(self, "_search_icon", None)
@@ -845,12 +899,60 @@ class MainWindow(tk.Tk):
         self._build_footer(main)
 
     def _build_glass_body(self, parent) -> None:
-        body = tk.Frame(parent, bg=theme.BG)
-        body.pack(fill="both", expand=True)
-        self._build_searchbar(body)
-        self._build_filterbar(body)
-        self._build_list(body)
-        self._build_footer(body)
+        """液态玻璃：内容像一整块玻璃浮在壁纸上，四周留一圈壁纸。"""
+        host = tk.Canvas(parent, bg=theme.BG, highlightthickness=0, bd=0)
+        host.pack(fill="both", expand=True)
+        self._glass_body = host
+        host.bind("<Configure>", lambda _e: self._paint_body_wallpaper())
+        pad = theme.px(26)
+        inner = tk.Frame(host, bg=theme.BG)
+        inner.place(x=pad, y=0, relwidth=1.0, relheight=1.0,
+                    width=-pad * 2, height=-pad)
+        self._build_searchbar(inner)
+        self._build_filterbar(inner)
+        self._build_list(inner)
+        self._build_footer(inner)
+
+    # ---- 壁纸绘制
+    def _paint_wallpaper_canvas(self, canvas, fade: bool = False,
+                                tag: str = "wall") -> None:
+        """把当前主题的壁纸画到某个 Canvas 上（按窗口坐标对齐）。"""
+        try:
+            width = canvas.winfo_width()
+            height = canvas.winfo_height()
+            if width <= 1 or height <= 1:
+                return
+            top = canvas.winfo_toplevel()
+            offset = (canvas.winfo_rootx() - top.winfo_rootx(),
+                      canvas.winfo_rooty() - top.winfo_rooty())
+            win = (max(top.winfo_width(), width),
+                   max(top.winfo_height(), height))
+            paint_wallpaper(canvas, width, height, offset=offset, win=win,
+                            tag=tag)
+            if not fade:
+                return
+            # 底部把壁纸淡回面板底色，避免一条生硬的接缝
+            bands = 14
+            fade_h = min(height * 0.42, theme.px(52))
+            y0 = height - fade_h
+            aspect = max(0.3, win[0] / max(1, win[1]))
+            for index in range(bands):
+                t = index / max(1, bands - 1)
+                y = y0 + fade_h * t
+                wall = theme.wallpaper_color_at(
+                    theme.WALLPAPER, 0.5,
+                    (offset[1] + y) / max(1.0, win[1]), aspect)
+                canvas.create_rectangle(
+                    0, y, width, y + fade_h / bands + 1,
+                    fill=theme.blend(theme.BG, wall, t ** 1.3),
+                    outline="", tags=tag)
+        except tk.TclError:
+            pass
+
+    def _paint_body_wallpaper(self) -> None:
+        host = getattr(self, "_glass_body", None)
+        if host is not None:
+            self._paint_wallpaper_canvas(host)
 
     def _build_neon_body(self, parent) -> None:
         body = tk.Frame(parent, bg=theme.BG)
@@ -1823,7 +1925,7 @@ class MainWindow(tk.Tk):
         cfgmod.save(self.cfg, self.base_dir)
         theme.apply_style(self.cfg.theme_preset, self.cfg.accent,
                           self.cfg.radius_button, self.cfg.radius_window,
-                          self.cfg.animations)
+                          self.cfg.animations, self.cfg.anim_fps)
         theme.apply_scale(self)
         mediainfo.THUMBNAIL_SIDE = theme.THUMB_SIZE
         self.download_dir = (self.cfg.download_dir
@@ -1908,8 +2010,9 @@ class MainWindow(tk.Tk):
                 self.attributes("-alpha", 0.975)
                 frameless.enable_acrylic(self, True, 0xCC20150b)
             elif theme.ACTIVE_PRESET == "glass":
-                # 液态玻璃：保留桌面透光，但不加磨砂模糊，保持清澈的折射感
-                self.attributes("-alpha", 0.94)
+                # 液态玻璃是浅色的，保持不透明才能保证深色文字清楚；
+                # 玻璃的透光和折射全部在控件内部自绘。
+                self.attributes("-alpha", 1.0)
                 frameless.enable_acrylic(self, False)
             else:
                 self.attributes("-alpha", 1.0)
@@ -1968,6 +2071,7 @@ class MainWindow(tk.Tk):
             frameless.enable_acrylic(self, False)
         except tk.TclError:
             pass
+        theme.end_timer_resolution()
         self.destroy()
 
 

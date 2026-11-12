@@ -46,7 +46,7 @@ class ThemeCard(tk.Canvas):
         self._draw()
 
     def _draw(self) -> None:
-        from .widgets import round_rect
+        from .widgets import paint_wallpaper, round_rect
 
         self.delete("all")
         p = theme.px
@@ -54,28 +54,38 @@ class ThemeCard(tk.Canvas):
         colors = data["colors"]
         radius = p(min(8, data.get("window_radius", 6)))
         preview_bottom = self._bh - p(20)
+        # 先铺这张主题自己的壁纸，缩略图就能看出各主题的壁纸差异
+        paint_wallpaper(self, self._bw, preview_bottom,
+                        spec=data.get("wallpaper"), tag="wall",
+                        win=(self._bw, preview_bottom))
         outline = theme.ACCENT if self._selected else (
             theme.BORDER_LIGHT if self._hover else theme.BORDER)
         width = max(2, p(2)) if self._selected else 1
         round_rect(self, 1, 1, self._bw - 1, preview_bottom, radius,
-                   fill=colors["BG"], outline=outline, width=width)
+                   fill="", outline=outline, width=width)
         # 迷你标题栏
         bar_h = p(14)
         self.create_rectangle(p(2), p(2), self._bw - p(2), p(2) + bar_h,
                               fill=data.get("title_bg", colors["BG"]), outline="")
         self.create_text(p(7), p(2) + bar_h / 2, text="●", anchor="w",
                          fill=data["accent"], font=(theme.FONT_FAMILY, 7))
-        # 迷你内容：缩略图 + 两行文字 + 按钮
+        # 迷你内容：磨砂卡片 + 两行文字 + 按钮
         content_top = p(2) + bar_h
-        thumb_top = content_top + p(6)
-        thumb_bottom = preview_bottom - p(8)
-        self.create_rectangle(p(8), thumb_top, p(30), thumb_bottom,
+        card_top = content_top + p(5)
+        card_bottom = preview_bottom - p(14)
+        round_rect(self, p(6), card_top, self._bw - p(6), card_bottom, p(5),
+                   fill=(theme.blend("#ffffff", colors["PANEL"], 0.55)
+                         if theme.luma(colors["BG"]) >= 0.45
+                         else colors["PANEL"]), outline="")
+        thumb_top = card_top + p(4)
+        thumb_bottom = card_bottom - p(4)
+        self.create_rectangle(p(10), thumb_top, p(32), thumb_bottom,
                               fill=data["accent"], outline="")
-        self.create_line(p(38), thumb_top + p(4), self._bw - p(10),
-                         thumb_top + p(4), fill=colors["FG"], width=max(2, p(2)))
-        self.create_line(p(38), thumb_top + p(12), self._bw - p(24),
-                         thumb_top + p(12), fill=colors["FG_FAINT"], width=1)
-        btn_y = preview_bottom - p(11)
+        self.create_line(p(40), thumb_top + p(5), self._bw - p(12),
+                         thumb_top + p(5), fill=colors["FG"], width=max(2, p(2)))
+        self.create_line(p(40), thumb_top + p(13), self._bw - p(26),
+                         thumb_top + p(13), fill=colors["FG_FAINT"], width=1)
+        btn_y = preview_bottom - p(7)
         round_rect(self, self._bw - p(44), btn_y - p(4), self._bw - p(8),
                    btn_y + p(4), p(min(6, data.get("button_radius", 4))),
                    fill=data["accent"], outline="")
@@ -329,6 +339,7 @@ class SettingsDialog(tk.Toplevel):
         self._page = "appearance"
         self._preview_job = None
         self._preview_pulse = 0.0
+        self._preview_key = None
 
         # ---- 本地状态
         self.var_preset = tk.StringVar(value=config.theme_preset)
@@ -336,6 +347,8 @@ class SettingsDialog(tk.Toplevel):
         self.var_radius_button = tk.IntVar(value=config.radius_button)
         self.var_radius_window = tk.IntVar(value=config.radius_window)
         self.var_animations = tk.BooleanVar(value=config.animations)
+        self.var_anim_fps = tk.IntVar(
+            value=max(5, min(120, int(getattr(config, "anim_fps", 60)))))
         self.var_dynamic = tk.BooleanVar(value=config.dynamic)
         self.var_deep = tk.BooleanVar(value=config.deep)
         self.var_scroll = tk.BooleanVar(value=config.scroll)
@@ -514,6 +527,21 @@ class SettingsDialog(tk.Toplevel):
             command=self._schedule_preview)
         anim.pack(anchor="w", pady=(theme.px(2), 0))
 
+        fps_row = tk.Frame(page, bg=theme.BG)
+        fps_row.pack(fill="x", pady=(theme.px(4), 0))
+        tk.Label(fps_row, text="动画帧率", bg=theme.BG, fg=theme.FG_DIM,
+                 width=8, anchor="w",
+                 font=theme.FONT_SMALL).pack(side="left")
+        self.fps_value = tk.Label(fps_row, text=f"{self.var_anim_fps.get()} FPS",
+                                  bg=theme.BG, fg=theme.FG,
+                                  width=6, font=theme.FONT_SMALL)
+        self.fps_value.pack(side="right")
+        MiniSlider(fps_row, self.var_anim_fps, 5, 120,
+                   self._fps_changed, width=theme.px(220)).pack(
+            side="left", padx=theme.px(10), fill="x", expand=True)
+        self.var_anim_fps.trace_add(
+            "write", lambda *_: self._fps_changed())
+
         self._heading(page, "实时预览")
         self.preview = tk.Canvas(page, bg=theme.BG, height=theme.px(178),
                                  highlightthickness=0, bd=0)
@@ -564,12 +592,20 @@ class SettingsDialog(tk.Toplevel):
         self._refresh_appearance()
         self._schedule_preview()
 
+    def _fps_changed(self) -> None:
+        try:
+            self.fps_value.configure(text=f"{self.var_anim_fps.get()} FPS")
+        except tk.TclError:
+            pass
+        self._schedule_preview()
+
     def _reset_appearance(self) -> None:
         self.var_preset.set("default")
         self.var_accent.set("")
         self.var_radius_button.set(10)
         self.var_radius_window.set(0)
         self.var_animations.set(True)
+        self.var_anim_fps.set(60)
         self._refresh_appearance()
         self._schedule_preview()
 
@@ -593,78 +629,110 @@ class SettingsDialog(tk.Toplevel):
         data = theme.palette_for(self.var_preset.get(), self.var_accent.get())
         colors = data["colors"]
         p = theme.px
-        canvas.delete("all")
-        width = max(canvas.winfo_width(), p(200))
-        height = max(canvas.winfo_height(), p(120))
         import math
 
-        from .widgets import round_rect
+        from .widgets import paint_wallpaper, round_rect
 
+        width = max(canvas.winfo_width(), p(200))
+        height = max(canvas.winfo_height(), p(120))
         win_r = p(min(24, self.var_radius_window.get()))
         btn_r = p(min(20, self.var_radius_button.get()))
         x1, y1, x2, y2 = p(8), p(6), width - p(8), height - p(6)
-        round_rect(canvas, x1, y1, x2, y2, win_r, fill=colors["BG"],
-                   outline=colors["BORDER"], width=1)
-        # 标题栏
-        title_h = p(26)
-        round_rect(canvas, x1 + 1, y1 + 1, x2 - 1, y1 + title_h,
-                   max(0, win_r - 1), fill=data.get("title_bg", colors["BG"]),
-                   outline="")
-        canvas.create_text(x1 + p(10), y1 + title_h / 2, text="●",
-                           anchor="w", fill=data["accent"],
-                           font=(theme.FONT_FAMILY, 7))
-        canvas.create_text(x1 + p(24), y1 + title_h / 2, text="StarSniff 星嗅",
-                           anchor="w", fill=data.get("title_fg", colors["FG"]),
-                           font=(theme.FONT_FAMILY, 8, "bold"))
-        for i, glyph in enumerate(("—", "□", "×")):
-            canvas.create_text(x2 - p(14) - i * p(16), y1 + title_h / 2,
-                               text=glyph, fill=data.get("title_sub",
-                                                         colors["FG_FAINT"]),
-                               font=(theme.FONT_FAMILY, 7))
-        # 内容卡片
-        card_y = y1 + title_h + p(8)
-        card_h = p(48)
-        round_rect(canvas, x1 + p(10), card_y, x2 - p(10), card_y + card_h,
-                   btn_r, fill=colors["PANEL"], outline=colors["BORDER"])
-        thumb = card_h - p(10)
-        round_rect(canvas, x1 + p(15), card_y + p(5),
-                   x1 + p(15) + thumb, card_y + p(5) + thumb,
-                   p(min(8, self.var_radius_button.get())),
-                   fill=data["accent"], outline="")
-        text_x = x1 + p(20) + thumb
-        canvas.create_text(text_x, card_y + p(16), anchor="w",
-                           text="示例视频.mp4", fill=colors["FG"],
-                           font=(theme.FONT_FAMILY, 9, "bold"))
-        canvas.create_text(text_x, card_y + p(31), anchor="w",
-                           text="1280×720 · 12.4 MB", fill=colors["FG_FAINT"],
-                           font=(theme.FONT_FAMILY, 8))
-        # 进度与按钮
-        bar_y = card_y + card_h + p(14)
-        round_rect(canvas, x1 + p(10), bar_y, x2 - p(160), bar_y + p(4), p(2),
-                   fill=colors["SEGMENT_BG"], outline="")
+        # 静态部分只在预设/尺寸变化时重画：一张壁纸就是几百个图元，
+        # 每帧重画会让设置窗口吃满 CPU。
+        key = (self.var_preset.get(), self.var_accent.get(), width, height,
+               win_r, btn_r)
+        if key != self._preview_key:
+            self._preview_key = key
+            canvas.delete("all")
+            # 主题壁纸铺满预览，窗口本身画成“浮在壁纸上的玻璃”
+            paint_wallpaper(canvas, width, height, spec=data.get("wallpaper"),
+                            tag="wall")
+            round_rect(canvas, x1, y1, x2, y2, win_r, fill=colors["BG"],
+                       outline=colors["BORDER"], width=1, tags=("static",))
+            # 标题栏
+            title_h = p(26)
+            round_rect(canvas, x1 + 1, y1 + 1, x2 - 1, y1 + title_h,
+                       max(0, win_r - 1),
+                       fill=data.get("title_bg", colors["BG"]), outline="",
+                       tags=("static",))
+            canvas.create_text(x1 + p(10), y1 + title_h / 2, text="●",
+                               anchor="w", fill=data["accent"],
+                               font=(theme.FONT_FAMILY, 7), tags=("static",))
+            canvas.create_text(x1 + p(24), y1 + title_h / 2,
+                               text="StarSniff 星嗅", anchor="w",
+                               fill=data.get("title_fg", colors["FG"]),
+                               font=(theme.FONT_FAMILY, 8, "bold"),
+                               tags=("static",))
+            for i, glyph in enumerate(("—", "□", "×")):
+                canvas.create_text(x2 - p(14) - i * p(16),
+                                   y1 + title_h / 2, text=glyph,
+                                   fill=data.get("title_sub", colors["FG_FAINT"]),
+                                   font=(theme.FONT_FAMILY, 7),
+                                   tags=("static",))
+            # 内容卡片
+            card_y = y1 + title_h + p(8)
+            card_h = p(48)
+            round_rect(canvas, x1 + p(10), card_y, x2 - p(10), card_y + card_h,
+                       btn_r, fill=colors["PANEL"], outline=colors["BORDER"],
+                       tags=("static",))
+            thumb = card_h - p(10)
+            round_rect(canvas, x1 + p(15), card_y + p(5),
+                       x1 + p(15) + thumb, card_y + p(5) + thumb,
+                       p(min(8, self.var_radius_button.get())),
+                       fill=data["accent"], outline="", tags=("static",))
+            text_x = x1 + p(20) + thumb
+            canvas.create_text(text_x, card_y + p(16), anchor="w",
+                               text="示例视频.mp4", fill=colors["FG"],
+                               font=(theme.FONT_FAMILY, 9, "bold"),
+                               tags=("static",))
+            canvas.create_text(text_x, card_y + p(31), anchor="w",
+                               text="1280×720 · 12.4 MB",
+                               fill=colors["FG_FAINT"],
+                               font=(theme.FONT_FAMILY, 8), tags=("static",))
+            # 进度条底 + 按钮
+            bar_y = card_y + card_h + p(14)
+            round_rect(canvas, x1 + p(10), bar_y, x2 - p(160), bar_y + p(4),
+                       p(2), fill=colors["SEGMENT_BG"], outline="",
+                       tags=("static",))
+            btn_y = bar_y + p(16)
+            round_rect(canvas, x2 - p(146), btn_y, x2 - p(78), btn_y + p(28),
+                       btn_r, fill=data["accent"], outline="",
+                       tags=("static",))
+            canvas.create_text(x2 - p(112), btn_y + p(14), text="下载",
+                               fill="#ffffff",
+                               font=(theme.FONT_FAMILY, 9, "bold"),
+                               tags=("static",))
+            round_rect(canvas, x2 - p(70), btn_y, x2 - p(10), btn_y + p(28),
+                       btn_r, fill=colors["PANEL_ALT"],
+                       outline=colors["BORDER"], tags=("static",))
+            canvas.create_text(x2 - p(40), btn_y + p(14), text="选择",
+                               fill=colors["FG_DIM"],
+                               font=(theme.FONT_FAMILY, 9), tags=("static",))
+        # 会动的部分：只重画进度条和小光点
+        canvas.delete("live")
+        bar_y = y1 + p(26) + p(8) + p(48) + p(14)
         progress = 0.35 + 0.45 * (0.5 + 0.5 * math.sin(self._preview_pulse))
         round_rect(canvas, x1 + p(10), bar_y,
                    x1 + p(10) + (x2 - p(160) - x1 - p(10)) * progress,
-                   bar_y + p(4), p(2), fill=data["accent"], outline="")
-        btn_y = bar_y + p(16)
-        round_rect(canvas, x2 - p(146), btn_y, x2 - p(78), btn_y + p(28),
-                   btn_r, fill=data["accent"], outline="")
-        canvas.create_text(x2 - p(112), btn_y + p(14), text="下载",
-                           fill="#ffffff", font=(theme.FONT_FAMILY, 9, "bold"))
-        round_rect(canvas, x2 - p(70), btn_y, x2 - p(10), btn_y + p(28),
-                   btn_r, fill=colors["PANEL_ALT"], outline=colors["BORDER"])
-        canvas.create_text(x2 - p(40), btn_y + p(14), text="选择",
-                           fill=colors["FG_DIM"], font=(theme.FONT_FAMILY, 9))
-        # 持续脉动的小光点（动画）
+                   bar_y + p(4), p(2), fill=data["accent"], outline="",
+                   tags=("live",))
         dot_x = x1 + p(18) + int((x2 - x1 - p(36)) *
                                  ((self._preview_pulse * 0.5) % 1.0))
         canvas.create_oval(dot_x - p(2), y2 - p(14) - p(2),
                            dot_x + p(2), y2 - p(14) + p(2),
-                           fill=data["accent"], outline="")
+                           fill=data["accent"], outline="", tags=("live",))
         if theme.ANIMATIONS:
-            self._preview_pulse += 0.10
             try:
-                self._preview_job = self.after(40, self._update_preview)
+                fps = max(5, min(120, int(self.var_anim_fps.get())))
+            except (tk.TclError, ValueError):
+                fps = theme.ANIM_FPS
+            delay = max(4, int(round(1000.0 / fps)))
+            # 按帧间隔推进相位，5–120 FPS 下动画速度保持一致
+            self._preview_pulse = (self._preview_pulse
+                                   + delay / 1000.0 * 2.5) % (math.pi * 20)
+            try:
+                self._preview_job = self.after(delay, self._update_preview)
             except tk.TclError:
                 self._preview_job = None
 
@@ -1133,6 +1201,10 @@ class SettingsDialog(tk.Toplevel):
         cfg.radius_button = max(0, min(28, int(self.var_radius_button.get())))
         cfg.radius_window = max(0, min(30, int(self.var_radius_window.get())))
         cfg.animations = bool(self.var_animations.get())
+        try:
+            cfg.anim_fps = max(5, min(120, int(self.var_anim_fps.get())))
+        except (TypeError, ValueError):
+            cfg.anim_fps = 60
         cfg.dynamic = bool(self.var_dynamic.get())
         cfg.deep = bool(self.var_deep.get())
         cfg.scroll = bool(self.var_scroll.get())

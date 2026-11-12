@@ -24,99 +24,219 @@ def round_rect(canvas: tk.Canvas, x1, y1, x2, y2, radius=8, **kwargs):
     return canvas.create_polygon(points, smooth=True, splinesteps=12, **kwargs)
 
 
+def paint_wallpaper(canvas: tk.Canvas, width: int, height: int,
+                    spec: dict | None = None, tag: str = "wall",
+                    offset: tuple[float, float] = (0, 0),
+                    win: tuple[float, float] = (0, 0),
+                    phase: float | None = None) -> None:
+    """在 Canvas 上画主题壁纸：三段竖向渐变 + 几团柔和的彩色光斑。
+
+    ``offset`` 是画布左上角在窗口里的像素位置，``win`` 是窗口尺寸，
+    这样标题栏和内容区各自画出来的壁纸能接上，看起来是同一张。
+    ``phase`` 不为空时让光斑非常缓慢地漂移（给标题栏做呼吸感）。
+    """
+    spec = spec or theme.wallpaper_spec()
+    win_w, win_h = (win if win and win[0] > 8 and win[1] > 8
+                    else (max(width, 1), max(height, 1)))
+    ox, oy = offset
+    try:
+        canvas.delete(tag)
+    except tk.TclError:
+        return
+    aspect = max(0.3, win_w / max(1.0, win_h))
+    step = max(2, int(round(height / 150.0)))
+    y = 0
+    while y < height:
+        v = (oy + y + step / 2.0) / max(1.0, win_h)
+        color = theme.wallpaper_color_at(spec, 0.5, v, aspect, blobs=False)
+        canvas.create_rectangle(0, y, width, y + step + 1, fill=color,
+                                outline=color, tags=tag)
+        y += step
+    for buoy, buv, radius, blob_color, strength in spec.get("blobs", ()):
+        if phase is not None:
+            buoy = buoy + 0.014 * math.sin(math.tau * (phase + buv))
+            buv = buv + 0.011 * math.cos(math.tau * (phase + buoy))
+        cx = buoy * win_w - ox
+        cy = buv * win_h - oy
+        rx = radius * win_w
+        if (cx + rx < 0 or cx - rx > width
+                or cy + rx < 0 or cy - rx > height):
+            continue
+        base_at = theme.wallpaper_color_at(spec, buoy, buv, aspect,
+                                           blobs=False)
+        rings = 40
+        for index in range(rings):
+            k = (index + 1) / rings
+            factor = 1.0 - k * 0.92
+            color = theme.blend(blob_color, base_at, strength * k ** 1.7)
+            canvas.create_oval(cx - rx * factor, cy - rx * factor,
+                               cx + rx * factor, cy + rx * factor,
+                               fill=color, outline="", tags=tag)
+
+
+def wallpaper_base(spec: dict | None = None, u: float = 0.5, v: float = 0.3,
+                   aspect: float = 1.7, white: float = 0.62) -> str:
+    """玻璃卡片的底色：壁纸颜色混白，像磨砂玻璃透出后面的壁纸。"""
+    spec = spec or theme.wallpaper_spec()
+    wall = theme.wallpaper_color_at(spec, u, v, aspect)
+    return theme.blend("#ffffff", wall, white)
+
+
 def glass_surface(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
                   phase: float = 0.0, mode: str = "glass",
-                  accent: str = "") -> None:
+                  accent: str = "", backdrop: str = "",
+                  sweep: bool = True, tags: tuple = ()) -> None:
     """绘制一块带光照的玻璃/亚克力表面。
 
     光照模型（固定）：
     * 主光来自左上方（天空/窗光）→ 顶边和左上角高光；
     * 环境光在顶部 → 上明下暗的竖向渐变；
     * 地面反光从下方进入玻璃 → 底部的折射亮带；
-    * 右下边缘处于背光 → 暗边 + 阴影。
+    * 右下边缘处于背光 → 暗边 + 投影。
 
-    phase 控制高光扫过位置（0~1），由列表/标题栏的动画循环推进。
-    acrylic 模式降低高光锐度、增加磨砂噪点，模拟半透明亚克力。
+    浅色主题下白色高光会“看不见”，所以改用冷调暗边 + 彩色折射带表现
+    厚度。phase 控制彩色柔光与扫光的位置；sweep=False 时只画静态部分，
+    会动的那层由 ``glass_sweep`` 按帧率单独补画。
     """
     width, height = x2 - x1, y2 - y1
     if width <= 3 or height <= 3:
         return
     p = theme.px
     radius = max(0, min(radius, width // 2, height // 2))
-    round_rect(canvas, x1, y1, x2, y2, radius, fill=base, outline="")
+    # 用底色本身的明暗决定光照模型：浅色卡片按浅色玻璃画，
+    # 深色按钮/强调色块仍然用白色高光，否则白字会糊成一片。
+    dark = theme.luma(base) < 0.55
+    accent = accent or theme.ACCENT
+    backdrop = backdrop or theme.BG
+    tags = tuple(tags) or ()
+    # 投影：浅色玻璃更需要阴影才能“浮”在壁纸上
+    shade = (theme.blend("#000000", backdrop, 0.45) if dark
+             else theme.blend("#55698a", backdrop, 0.15))
+    round_rect(canvas, x1, y1 + p(2), x2, y2 + p(2), radius, fill=shade,
+               outline="", tags=tags)
+    round_rect(canvas, x1, y1, x2, y2, radius, fill=base, outline="",
+               tags=tags)
     inset = max(p(5), radius * 0.45)
-    bands = 24
-    top_boost = 0.12 if mode == "glass" else 0.06
-    # 用相互重叠 1px 的矩形画渐变，避免 1px 横线之间漏出底色形成扫描线
+    bands = 22
+    top_boost = 0.12 if dark else 0.66
+    bottom_shade = 0.24 if dark else 0.10
     for index in range(bands):
         t = index / max(1, bands - 1)
-        if t < 0.68:
-            color = theme.blend("#ffffff", base, top_boost * (1.0 - t) ** 1.8)
+        if t < 0.62:
+            color = theme.blend("#ffffff", base, top_boost * (1.0 - t) ** 1.7)
         else:
-            color = theme.blend("#000000", base, (t - 0.68) * 0.24)
-        y0 = y1 + radius * 0.35 + (height - radius * 0.7) * t
-        y1_band = y0 + (height - radius * 0.7) / bands + 1
+            k = (t - 0.62) / 0.38
+            if dark:
+                color = theme.blend("#000000", base, bottom_shade * k)
+            else:
+                color = theme.blend("#5f7fa8", base, bottom_shade * k)
+        y0 = y1 + radius * 0.3 + (height - radius * 0.6) * t
+        y1_band = y0 + (height - radius * 0.6) / bands + 1
         canvas.create_rectangle(x1 + inset, y0, x2 - inset, y1_band,
-                                fill=color, outline=color)
-    # 顶边/左边反射，右下暗边
+                                fill=color, outline=color, tags=tags)
+    # 顶边 / 左边反射，右下背光暗边
     canvas.create_line(x1 + radius * 0.65, y1 + p(1),
                        x2 - radius * 0.65, y1 + p(1),
-                       fill=theme.blend("#ffffff", base, 0.62),
-                       width=max(1, p(1)), capstyle="round")
-    # 左上受光、右下背光的两条竖向边缘
+                       fill=theme.blend("#ffffff", base, 0.62 if dark else 0.92),
+                       width=1, capstyle="round", tags=tags)
     canvas.create_line(x1 + p(1), y1 + radius * 0.7,
                        x1 + p(1), y2 - radius * 0.7,
-                       fill=theme.blend("#ffffff", base, 0.22),
-                       width=1)
+                       fill=theme.blend("#ffffff", base, 0.22 if dark else 0.70),
+                       width=1, tags=tags)
     canvas.create_line(x2 - p(1), y1 + radius * 0.7,
                        x2 - p(1), y2 - radius * 0.7,
-                       fill=theme.blend("#000000", base, 0.26),
-                       width=1)
+                       fill=theme.blend("#000000", base, 0.26 if dark else 0.09),
+                       width=1, tags=tags)
     canvas.create_line(x1 + radius * 0.7, y2 - p(1),
                        x2 - radius * 0.7, y2 - p(1),
-                       fill=theme.blend("#000000", base, 0.34),
-                       width=1)
-    if mode == "glass" and height > p(28):
-        # 底部折射带：环境光从下方穿入，略带强调色
-        band_top = y1 + height * 0.58
-        band_bottom = y1 + height * 0.74
-        refracted = theme.blend(accent or theme.ACCENT, base, 0.13)
+                       fill=theme.blend("#000000", base, 0.34 if dark else 0.16),
+                       width=1, tags=tags)
+    if mode == "glass" and height > p(64):
+        # 底部折射带：环境光从下方穿入，带强调色——浅色玻璃的“颜色”来源
+        band_top = y1 + height * (0.58 if dark else 0.62)
+        band_bottom = y1 + height * (0.74 if dark else 0.82)
+        refracted = theme.blend(accent, base, 0.13 if dark else 0.20)
         canvas.create_polygon(
             x1 + inset + p(4), band_top,
             x2 - inset - p(4), band_top - p(2),
             x2 - inset - p(2), band_bottom,
             x1 + inset + p(2), band_bottom + p(2),
-            fill=refracted, outline="")
+            fill=refracted, outline="", tags=tags)
         canvas.create_line(x1 + inset + p(6), band_top,
                            x2 - inset - p(6), band_top - p(1),
-                           fill=theme.blend("#ffffff", base, 0.28), width=1)
-        # 左上方镜面高光，随相位轻微漂移
-        sx = x1 + width * (0.24 + 0.05 * math.sin(phase * math.tau))
-        sy = y1 + height * 0.20
-        canvas.create_oval(sx - width * 0.09, sy - height * 0.06,
-                           sx + width * 0.09, sy + height * 0.06,
-                           fill=theme.blend("#ffffff", base, 0.105),
-                           outline="")
-        # 扫光：一条斜向的高光带，模拟玻璃转动时的反射
-        sweep_x = x1 - width * 0.25 + (phase % 1.0) * width * 1.5
-        canvas.create_polygon(
-            sweep_x, y1 + p(2),
-            sweep_x + width * 0.07, y1 + p(2),
-            sweep_x + width * 0.17, y2 - p(2),
-            sweep_x + width * 0.03, y2 - p(2),
-            fill=theme.blend("#ffffff", base, 0.055), outline="")
+                           fill=theme.blend("#ffffff", base,
+                                            0.28 if dark else 0.75),
+                           width=1, tags=tags)
+        # 左上角环境色柔光（静态版；动画版由 glass_sweep 负责）
+        sx = x1 + width * 0.26
+        sy = y1 + height * 0.22
+        canvas.create_oval(sx - width * 0.16, sy - height * 0.12,
+                           sx + width * 0.16, sy + height * 0.12,
+                           fill=theme.blend(theme.blend(accent, "#ffffff", 0.4),
+                                            base, 0.10 if dark else 0.16),
+                           outline="", tags=tags)
     elif mode == "acrylic":
         # 亚克力：顶部雾光 + 很淡的竖向光泽，没有锐利折射
         canvas.create_rectangle(x1 + p(2), y1 + p(2),
                                 x2 - p(2), y2 - p(2),
                                 fill=theme.blend("#ffffff", base, 0.018),
-                                outline="")
+                                outline="", tags=tags)
         canvas.create_polygon(
             x1 + width * 0.10, y1 + p(2),
             x2 - width * 0.10, y1 + p(2),
             x2 - width * 0.22, y1 + height * 0.55,
             x1 + width * 0.22, y1 + height * 0.55,
-            fill=theme.blend("#ffffff", base, 0.045), outline="")
+            fill=theme.blend("#ffffff", base, 0.045), outline="", tags=tags)
+    if sweep:
+        glass_sweep(canvas, x1, y1, x2, y2, radius, base, phase,
+                    accent=accent, tags=tags)
+
+
+def soft_beam(canvas: tk.Canvas, x1, y1, x2, y2, center: float,
+               half: float, base: str, color: str, peak: float,
+               tags: tuple, strips: int = 9) -> None:
+    """用几条相邻的竖条拼出一条“软边”光带（Tk 没有透明度）。
+
+    直接画一个椭圆或大色块会露出硬边，几条按正弦衰减的竖条拼起来，
+    远看就是一道柔和的反光。
+    """
+    slant = (y2 - y1) * 0.18
+    for index in range(strips):
+        t = (index + 0.5) / strips
+        weight = peak * math.sin(math.pi * t) ** 1.4
+        if weight <= 0.002:
+            continue
+        xa = center - half + 2 * half * (index / strips)
+        xb = center - half + 2 * half * ((index + 1) / strips)
+        canvas.create_polygon(xa, y1 + 2, xb, y1 + 2, xb + slant, y2 - 2,
+                              xa + slant, y2 - 2,
+                              fill=theme.blend(color, base, weight),
+                              outline="", tags=tags)
+
+
+def glass_sweep(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
+                phase: float, accent: str = "", tags: tuple = ()) -> None:
+    """玻璃上会动的那部分：会换色的环境反光 + 一道斜向扫过的光带。
+
+    只画十几个图元，所以可以放心地按 5–120 FPS 重绘。
+    """
+    width, height = x2 - x1, y2 - y1
+    if width <= 3 or height <= 3:
+        return
+    dark = theme.luma(base) < 0.55
+    tags = tuple(tags) or ()
+    # 小控件（按钮）上扫光必须很淡，否则白字会消失在亮带里
+    subtle = 0.4 if height < theme.px(60) else 1.0
+    progress = phase % 1.0
+    # 彩色环境光：颜色随时间在强调色/雾蓝/淡紫/浅粉之间流动
+    aura = theme.aurora_color(phase)
+    center = x1 + width * (progress * 1.3 - 0.15)
+    soft_beam(canvas, x1, y1, x2, y2, center, width * 0.17, base, aura,
+               (0.07 if dark else 0.11) * subtle, tags)
+    soft_beam(canvas, x1, y1, x2, y2, center + width * 0.07, width * 0.05,
+               base, "#ffffff", (0.05 if dark else 0.16) * subtle, tags,
+               strips=5)
+
 
 
 def ellipsize(text: str, font: tkfont.Font, max_width: int) -> str:
@@ -278,7 +398,8 @@ class AccentButton(tk.Canvas):
             self._draw()
             return
         start = self._fill
-        steps = 7
+        # 过渡总时长固定在 ~110ms：帧率越低帧数越少，但不会变慢
+        steps = max(2, int(round(110.0 / theme.frame_delay())))
 
         def step(index: int = 0) -> None:
             try:
@@ -290,7 +411,8 @@ class AccentButton(tk.Canvas):
             self._fill = theme.blend(target, start, weight)
             self._draw()
             if index < steps:
-                self._anim_job = self.after(16, lambda: step(index + 1))
+                self._anim_job = self.after(theme.frame_delay(),
+                                            lambda: step(index + 1))
             else:
                 self._anim_job = None
 
@@ -476,6 +598,10 @@ class ResourceList(tk.Frame):
         self._on_open = on_open or (lambda _item: None)
         self._on_context = on_context or (lambda _e, _item: None)
         self._rows_drawn: list[int] = []
+        # 可见卡片的几何信息：动画只重画这些卡片上的扫光，不重画整行
+        self._card_boxes: list[tuple] = []
+        self._win_size = (0, 0)
+        self._win_offset = (0, 0)
         # 批量插入时合并重绘，避免 N 次全表刷新
         self._redraw_pending = False
         self._change_pending = False
@@ -515,22 +641,47 @@ class ResourceList(tk.Frame):
                 and theme.ANIMATIONS):
             self.bind("<Destroy>", self._on_destroy_shine, add="+")
             try:
-                self._shine_job = self.after(100, self._shine_tick)
+                self._shine_job = self.after(theme.frame_delay(),
+                                             self._shine_tick)
             except tk.TclError:
                 self._shine_job = None
 
     def _shine_tick(self) -> None:
-        """列表卡片的扫光动画：只重绘可见行，约 10fps。"""
+        """列表玻璃的动画：只重画卡片上的扫光，帧率跟随设置（5–120 FPS）。"""
         self._shine_job = None
         try:
             if not self.winfo_exists():
                 return
-            self._shine_phase = (self._shine_phase + 0.045) % 1.0
-            if self.items and self.winfo_ismapped():
-                self.redraw()
-            self._shine_job = self.after(100, self._shine_tick)
+            delay = theme.frame_delay()
+            self._shine_phase = (self._shine_phase + 0.45 * delay / 1000.0) % 1.0
+            if self._card_boxes and self.winfo_ismapped():
+                self._draw_sweeps()
+            self._shine_job = self.after(delay, self._shine_tick)
         except tk.TclError:
             self._shine_job = None
+
+    def _draw_sweeps(self) -> None:
+        """重画所有可见卡片的扫光（两个图元/卡片，所以可以跑满帧率）。
+
+        扫光必须压在卡片上、但在文字下面，否则白字会糊掉：这里给每行一个
+        独立 tag，画完后再把它压到该行内容的第一张图元下面。
+        """
+        canvas = self.canvas
+        try:
+            canvas.delete("shine")
+        except tk.TclError:
+            return
+        radius = theme.card_radius()
+        for index, x1, y, x2, h, base, anchor in self._card_boxes:
+            tag = f"shine{index}"
+            try:
+                glass_sweep(canvas, x1, y, x2, y + h, radius, base,
+                            (self._shine_phase + index * 0.11) % 1.0,
+                            accent=theme.ACCENT, tags=("shine", tag))
+                if anchor is not None:
+                    canvas.tag_lower(tag, anchor)
+            except tk.TclError:
+                return
 
     def _on_destroy_shine(self, event=None) -> None:
         if event is not None and event.widget is not self:
@@ -812,12 +963,26 @@ class ResourceList(tk.Frame):
     def redraw(self) -> None:
         canvas = self.canvas
         canvas.delete("all")
+        self._card_boxes = []
         width = max(canvas.winfo_width(), 200)
         height = max(canvas.winfo_height(), 100)
         top = canvas.canvasy(0)
         first = max(0, int(top // theme.ROW_HEIGHT) - 1)
         visible = int(height // theme.ROW_HEIGHT) + 3
         last = min(len(self.items), first + visible)
+
+        # 壁纸在列表里只露出一条条底色（卡片之间和左右留白）：
+        # 每一行先铺一条按窗口位置取样的壁纸色，再盖上玻璃卡片。
+        self._win_size = (max(self.winfo_toplevel().winfo_width(), width),
+                          max(self.winfo_toplevel().winfo_height(), height))
+        try:
+            self._win_offset = (canvas.winfo_rootx()
+                                - self.winfo_toplevel().winfo_rootx(),
+                                canvas.winfo_rooty()
+                                - self.winfo_toplevel().winfo_rooty())
+        except tk.TclError:
+            self._win_offset = (0, 0)
+        self._paint_row_backgrounds(width, first, last)
 
         if not self.items:
             self._draw_empty(width, height)
@@ -829,6 +994,42 @@ class ResourceList(tk.Frame):
             y = index * theme.ROW_HEIGHT + max(2, gap // 2)
             self._draw_row(index, item, y,
                            theme.ROW_HEIGHT - max(4, gap), width)
+        if theme.ANIMATIONS:
+            self._draw_sweeps()
+
+    def _paint_row_backgrounds(self, width: int, first: int, last: int) -> None:
+        """铺壁纸底色：让玻璃卡片看起来浮在壁纸上。
+
+        用按行切片的竖向渐变代替整张位图：十几条色块，滚动时跟着内容走，
+        开销极小，又比纯色平铺更像一张壁纸。
+        """
+        canvas = self.canvas
+        spec = theme.wallpaper_spec()
+        win_w, win_h = self._win_size
+        aspect = max(0.3, win_w / max(1.0, win_h))
+        ox, oy = self._win_offset
+        top = canvas.canvasy(0)
+        height = max(canvas.winfo_height(), 100)
+        row = theme.ROW_HEIGHT
+        if self.items:
+            y = max(0, first - 1) * row - row / 2
+        else:
+            # 空列表：用较小的步长铺满整个视口
+            row = max(theme.px(24), row // 3)
+            y = top - row
+        end = top + height + row
+        # 顶部淡入：列表上沿紧挨着搜索区，直接切到壁纸色会出现一条硬边
+        fade = max(1.0, float(theme.px(36)))
+        while y < end:
+            v = (oy + y - top + row / 2) / max(1.0, win_h)
+            color = theme.wallpaper_color_at(spec, 0.5, v, aspect)
+            if y < top + fade:
+                k = max(0.0, min(1.0, (y - top) / fade))
+                color = theme.blend(color, theme.BG, k)
+            canvas.create_rectangle(0, y, width, y + row + 1, fill=color,
+                                    outline=color, tags=("wall",))
+            y += row
+        canvas.tag_lower("wall")
 
     def _draw_empty(self, width: int, height: int) -> None:
         """空列表：居中图标 + 标题 + 说明。"""
@@ -871,22 +1072,33 @@ class ResourceList(tk.Frame):
         hovered = self._hover == index
         if style == "cards":
             base = theme.CARD
+            if theme.GLASS and not theme.NEON:
+                # 卡片是磨砂玻璃：底色取它背后那块壁纸的颜色混白
+                win_w, win_h = self._win_size
+                offset = self._win_offset[1] + y - canvas.canvasy(0)
+                base = wallpaper_base(
+                    u=0.5, v=(offset + h / 2) / max(1.0, win_h),
+                    aspect=max(0.3, win_w / max(1, win_h)), white=0.62)
             if checked:
                 fill = theme.blend(theme.ACCENT, base, 0.22)
             elif selected:
                 fill = theme.blend(theme.ACCENT, base, 0.12)
             elif hovered:
-                fill = theme.CARD_HOVER
+                fill = theme.blend(theme.CARD_HOVER, base, 0.55)
             else:
                 fill = base
             glass_surface(
                 canvas, x1, y, x2, y + h, theme.card_radius(), fill,
                 phase=(self._shine_phase + index * 0.11) % 1.0,
                 mode="acrylic" if theme.ACRYLIC else "glass",
-                accent=theme.ACCENT)
-            round_rect(canvas, x1, y, x2, y + h, theme.card_radius(),
-                       fill="", outline=theme.blend(theme.BORDER_LIGHT, fill, 0.55),
-                       width=1)
+                accent=theme.ACCENT, backdrop=theme.BG,
+                sweep=not theme.ANIMATIONS)
+            anchor = round_rect(
+                canvas, x1, y, x2, y + h, theme.card_radius(),
+                fill="", outline=theme.blend(theme.BORDER_LIGHT, fill, 0.55),
+                width=1)
+            if theme.ANIMATIONS:
+                self._card_boxes.append((index, x1, y, x2, h, fill, anchor))
         elif style == "flat":
             fill = (theme.SELECTED_ROW if checked else
                     theme.ROW_HOVER if (selected or hovered) else theme.PANEL)
@@ -1275,15 +1487,17 @@ class SegmentedTabs(tk.Canvas):
             if self._slide_t >= 1.0:
                 self._refresh()
                 return
-            self._slide_t = min(1.0, self._slide_t + 0.22)
+            delay = theme.frame_delay()
+            # 按帧间隔推进，保证 5–120 FPS 下切换时长都约 180ms
+            self._slide_t = min(1.0, self._slide_t + delay / 180.0)
             self._refresh()
             try:
-                self._slide_job = self.after(16, step)
+                self._slide_job = self.after(delay, step)
             except tk.TclError:
                 self._slide_job = None
 
         try:
-            self._slide_job = self.after(16, step)
+            self._slide_job = self.after(theme.frame_delay(), step)
         except tk.TclError:
             self._slide_job = None
 
