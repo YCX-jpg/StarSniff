@@ -695,7 +695,7 @@ class MainWindow(tk.Tk):
         """Apple 风格：大号胶囊输入框浮在壁纸上，主按钮嵌在胶囊内部。"""
         pad = theme.px(int(self._layout.get("search_pad", 26)))
         height = theme.px(int(self._layout.get("search_height", 48)))
-        gap = theme.px(52)
+        gap = theme.px(38)
         hero = tk.Canvas(parent, bg=theme.BG, height=height + gap * 2,
                          highlightthickness=0, bd=0)
         hero.pack(fill="x")
