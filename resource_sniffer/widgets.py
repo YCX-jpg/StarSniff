@@ -1452,6 +1452,7 @@ class SegmentedTabs(tk.Canvas):
         self._slide_to: Optional[tuple[float, float]] = None
         self._slide_t = 1.0
         self._slide_job = None
+        self._lens_font: Optional[tkfont.Font] = None
         for key, label in options:
             self._base_labels[key] = label
         self.bind("<Button-1>", self._on_click)
@@ -1488,8 +1489,8 @@ class SegmentedTabs(tk.Canvas):
                 self._refresh()
                 return
             delay = theme.frame_delay()
-            # 按帧间隔推进，保证 5–120 FPS 下切换时长都约 180ms
-            self._slide_t = min(1.0, self._slide_t + delay / 180.0)
+            # 按帧间隔推进，保证 5–120 FPS 下切换时长都约 320ms
+            self._slide_t = min(1.0, self._slide_t + delay / 320.0)
             self._refresh()
             try:
                 self._slide_job = self.after(delay, step)
@@ -1568,6 +1569,11 @@ class SegmentedTabs(tk.Canvas):
                           None)
         if active_box is not None and self._slide_to is None:
             self._slide_to = (active_box[0], active_box[1])
+        blob = self._blob_span() if style == "capsule" else None
+        if blob is not None:
+            self._draw_blob(blob[0], blob[1], pad, h)
+        lens = self._bubble_geom(h) if (style == "capsule"
+                                        and theme.ANIMATIONS) else None
         for left, right, key in self._boxes:
             active = key == self._current
             if theme.CLASSIC or style == "tabs":
@@ -1579,40 +1585,165 @@ class SegmentedTabs(tk.Canvas):
                                      fill=theme.BORDER_LIGHT)
                     self.create_line(left + 2, pad + 1, left + 2, h - pad - 1,
                                      fill=theme.BORDER_LIGHT)
-            elif active:
-                pill_left, pill_right = left, right
-                if (self._slide_t < 1.0 and self._slide_from
-                        and self._slide_to):
-                    eased = 1 - (1 - self._slide_t) ** 3
-                    pill_left = (self._slide_from[0]
-                                 + (self._slide_to[0] - self._slide_from[0]) * eased)
-                    pill_right = (self._slide_from[1]
-                                  + (self._slide_to[1] - self._slide_from[1]) * eased)
-                if style == "capsule":
-                    round_rect(self, pill_left + 2, pad + 1,
-                               pill_right - 2, h - pad - 1,
-                               theme.px(15), fill=theme.ACCENT,
-                               outline=theme.blend(theme.ACCENT, "#ffffff", 0.25),
-                               width=1)
-                    self.create_line(pill_left + theme.px(12), pad + 2,
-                                     pill_right - theme.px(12), pad + 2,
-                                     fill=theme.blend(theme.ACCENT, "#ffffff", 0.55),
-                                     width=1)
-                else:
-                    round_rect(self, left + 1, pad, right - 1, h - pad,
-                               theme.button_radius(), fill=theme.SEGMENT_ACTIVE,
-                               outline="")
-            elif key == self._hover:
+            elif active and style != "capsule":
+                round_rect(self, left + 1, pad, right - 1, h - pad,
+                           theme.button_radius(), fill=theme.SEGMENT_ACTIVE,
+                           outline="")
+            elif key == self._hover and not active:
                 round_rect(self, left + 1, pad, right - 1, h - pad,
                            theme.button_radius(), fill=theme.ROW_HOVER,
                            outline="")
+            center = (left + right) / 2
+            # 球盖住的那一格不再画原字，改为球内放大版，才像真的透镜
+            if lens is not None and abs(center - lens[0]) < lens[2] * 0.92:
+                continue
             font = self._font_active if active else self._font
-            if style == "capsule" and active:
-                color = "#ffffff"
+            if style == "capsule":
+                # 文字颜色跟着液体块走：块还没到之前保持深色，别出现"白字消失了"
+                on_blob = (blob is not None
+                           and blob[0] - theme.px(6) <= center
+                           <= blob[1] + theme.px(6))
+                color = "#ffffff" if on_blob else (
+                    theme.FG if active else theme.FG_DIM)
             else:
                 color = theme.FG if active else theme.FG_DIM
-            self.create_text((left + right) / 2, h / 2,
+            self.create_text(center, h / 2,
                              text=self._label_for(key), fill=color, font=font)
+        if lens is not None:
+            self._draw_bubble(pad, h, lens)
+
+    # ------------------------------------------------ 液态玻璃：指示块与玻璃球
+    def _blob_span(self):
+        """液体指示块当前占据的横向范围（滑动时会被拉长）。"""
+        box = next((b for b in self._boxes if b[2] == self._current), None)
+        if box is None:
+            return None
+        left, right = box[0] + 2, box[1] - 2
+        if (self._slide_t < 1.0 and self._slide_from and self._slide_to):
+            t = max(0.0, min(1.0, self._slide_t))
+            eased = 1 - (1 - t) ** 3
+            a0 = self._slide_from[0] + 2
+            a1 = self._slide_from[1] - 2
+            b0 = self._slide_to[0] + 2
+            b1 = self._slide_to[1] - 2
+            left = a0 + (b0 - a0) * eased
+            right = a1 + (b1 - a1) * eased
+            grow = abs(b0 - a0) * 0.45 * math.sin(math.pi * t)
+            left -= grow
+            right += grow
+        return (left, right)
+
+    def _draw_blob(self, left: float, right: float, pad: int,
+                   h: int) -> None:
+        """液体指示块：几层由淡到浓，边缘像被抹开，而不是一块实心圆角矩形。"""
+        accent = theme.ACCENT
+        bar = theme.SEGMENT_BG
+        radius = theme.px(15)
+        if right - left < theme.px(8):
+            right = left + theme.px(8)
+        for expand, weight in ((-theme.px(6), 0.10), (-theme.px(3), 0.30),
+                               (0, 1.0)):
+            fill = (accent if weight >= 1.0
+                    else theme.blend(accent, bar, weight))
+            round_rect(self, left + expand, pad + 1 + expand * 0.35,
+                       right - expand, h - pad - 1 - expand * 0.35,
+                       max(theme.px(4), radius + expand * 0.3),
+                       fill=fill, outline="")
+        if right - left > theme.px(26):
+            self.create_line(left + theme.px(10), pad + 2,
+                             right - theme.px(10), pad + 2,
+                             fill=theme.blend("#ffffff", accent, 0.45),
+                             width=1)
+
+    def _bubble_geom(self, h: int):
+        """玻璃球当前的位置与形状：返回 (cx, cy, rx, ry, fade)，隐藏时 None。"""
+        if not (self._slide_from and self._slide_to):
+            return None
+        if self._slide_t >= 1.0:
+            return None
+        t = max(0.0, min(1.0, self._slide_t))
+        eased = 1 - (1 - t) ** 3
+        cx_from = (self._slide_from[0] + self._slide_from[1]) / 2
+        cx_to = (self._slide_to[0] + self._slide_to[1]) / 2
+        cx = cx_from + (cx_to - cx_from) * eased
+        cy = h / 2
+        radius = h * 0.47
+        travel = min(1.0, abs(cx_to - cx_from) / max(1.0, radius * 4.0))
+        squash = 1.0 + 0.22 * math.sin(math.pi * min(1.0, t * 1.3)) * travel
+        fade = 1.0 if t < 0.55 else max(0.0, 1.0 - (t - 0.55) / 0.45)
+        if fade <= 0.02:
+            return None
+        return (cx, cy, radius * squash, radius / squash, fade)
+
+    def _draw_bubble(self, pad: int, h: int, lens: tuple) -> None:
+        """液态玻璃球：切换页签时从旧位置滚到新位置，途中把它盖住的内容放大。
+
+        Tk 没有真正的折射：用「亮边 + 磨砂玻璃体 + 高光 + 焦散 + 放大的液体块
+        和文字」拼出透镜观感。被球盖住的那一格的原字会先跳过，球里只画放大版，
+        看起来就像内容被折射放大了。
+        """
+        cx, cy, rx, ry, fade = lens
+        bar = theme.SEGMENT_BG
+        accent = theme.ACCENT
+
+        def toward(color: str, weight: float = 1.0) -> str:
+            # 淡出 = 把颜色往胶囊底色里融
+            return theme.blend(color, bar, fade * weight)
+
+        body = toward(theme.blend("#ffffff", bar, 0.34))
+        self.create_oval(cx - rx, cy - ry, cx + rx, cy + ry, fill=body,
+                         outline="")
+        # 边缘一圈略深，做出玻璃的"厚度"
+        self.create_oval(cx - rx * 0.99, cy - ry * 0.99,
+                         cx + rx * 0.99, cy + ry * 0.99,
+                         fill=toward(theme.blend(bar, "#ffffff", 0.65), 0.55),
+                         outline="")
+        self.create_oval(cx - rx * 0.82, cy - ry * 0.82,
+                         cx + rx * 0.82, cy + ry * 0.82,
+                         fill=body, outline="")
+        # 亮边 + 外侧极细的暗边，让球从胶囊上"浮"起来
+        self.create_oval(cx - rx, cy - ry, cx + rx, cy + ry,
+                         outline=toward("#ffffff", 0.95),
+                         width=max(2, theme.px(2)))
+        self.create_oval(cx - rx - 1, cy - ry - 1, cx + rx + 1, cy + ry + 1,
+                         outline=toward(theme.blend(accent, "#000000", 0.25),
+                                        0.35), width=1)
+        # 放大后的液体块 + 文字
+        box = min(self._boxes, key=lambda b: abs((b[0] + b[1]) / 2 - cx),
+                  default=None)
+        if box is None:
+            return
+        # 球里至少要有东西：先画一块放大的液体块，文字放得下再叠上去
+        text = self._base_labels.get(box[2], "")
+        active = box[2] == self._current
+        if self._lens_font is None:
+            size = max(8, int(round(theme.FONT_SMALL[1] * 1.15)))
+            self._lens_font = tkfont.Font(
+                family=theme.FONT_FAMILY, size=size, weight="bold")
+        text_w = self._lens_font.measure(text) if text else 0
+        blob_w = min(2 * rx * 0.82, max(theme.px(26), text_w + theme.px(18)))
+        round_rect(self, cx - blob_w / 2, cy - ry * 0.52,
+                   cx + blob_w / 2, cy + ry * 0.52, theme.px(10),
+                   fill=toward(accent, 0.96), outline="")
+        if text and text_w <= 2 * rx * 0.80:
+            self.create_text(cx, cy, text=text, fill=toward("#ffffff", 0.97),
+                             font=self._lens_font)
+        # 左上镜面高光：贴着内缘，别糊在球中间的文字上
+        hx, hy = cx - rx * 0.56, cy - ry * 0.60
+        self.create_oval(hx - rx * 0.19, hy - ry * 0.11,
+                         hx + rx * 0.19, hy + ry * 0.11,
+                         fill=toward("#ffffff", 0.16), outline="")
+        self.create_oval(hx - rx * 0.085, hy - ry * 0.048,
+                         hx + rx * 0.085, hy + ry * 0.048,
+                         fill=toward("#ffffff", 0.92), outline="")
+        # 右下焦散：一道细小的暖白反光
+        gx, gy = cx + rx * 0.60, cy + ry * 0.56
+        self.create_oval(gx - rx * 0.13, gy - ry * 0.08,
+                         gx + rx * 0.13, gy + ry * 0.08,
+                         fill=toward("#fff3d6", 0.26), outline="")
+        self.create_oval(gx - rx * 0.048, gy - ry * 0.028,
+                         gx + rx * 0.048, gy + ry * 0.028,
+                         fill=toward("#fffdf6", 0.80), outline="")
 
     # ------------------------------------------------------------------ 交互
     def _key_at(self, x: float) -> Optional[str]:
