@@ -25,7 +25,18 @@ shutil.rmtree(CFG_DIR, ignore_errors=True)
 from resource_sniffer import theme  # noqa: E402
 
 PASS, FAIL = [], []
-PORT = 8798
+def _free_port() -> int:
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+    finally:
+        sock.close()
+
+
+PORT = _free_port()
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -641,11 +652,16 @@ def main() -> int:
                   and footer_bottom <= app.winfo_height() + 2,
                   f"{layout.get('shell')} / footer={footer_bottom}")
             if key == "glass":
+                app._apply_window_glass()
+                pump(0.1)
                 check("液态玻璃：红黄绿灯 + 卡片列表",
                       hasattr(app, "traffic_lights")
                       and layout.get("list") == "cards"
                       and app.btn_start.winfo_width() >= theme.px(80),
                       "traffic lights / cards")
+                check("液态玻璃窗口保留透光",
+                      float(app.attributes("-alpha")) < 0.999,
+                      app.attributes("-alpha"))
             elif key == "acrylic":
                 app._apply_window_glass()
                 pump(0.1)

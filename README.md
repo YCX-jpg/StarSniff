@@ -203,7 +203,7 @@ build_exe.ps1              本地构建 exe + Release zip
 
 ```bat
 python tests\selftest.py     :: 118 项：嗅探、清单、并行/分段下载、HLS、主题、图标、更新、yt-dlp 一键下载、解析器
-python tests\uitest.py       :: 104 项：布局、DPI、排序、窗口、无边框标题栏、5 套主题布局、亚克力半透明、设置窗口不卡死、更新不阻塞、yt-dlp 按钮、下载、UA、代理、边界
+python tests\uitest.py       :: 105 项：布局、DPI、排序、窗口、无边框标题栏、5 套主题布局、亚克力/液态玻璃半透明、设置窗口不卡死、更新不阻塞、yt-dlp 按钮、下载、UA、代理、边界
 python tests\guishot.py      :: 生成截图并做版式像素校验
 ```
 
@@ -240,8 +240,8 @@ dist\StarSniff-portable.exe.sha256
 **自动发布**：把版本号改好并提交后，推一个 `v<版本>` tag：
 
 ```powershell
-git tag v2.1.3
-git push origin v2.1.3
+git tag v2.1.4
+git push origin v2.1.4
 ```
 
 GitHub Actions（`.github/workflows/release.yml`）会在 Windows runner 上

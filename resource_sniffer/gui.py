@@ -695,6 +695,13 @@ class MainWindow(tk.Tk):
         refract.create_line(theme.px(60), 1, 4000, 1,
                             fill=theme.blend("#ffffff", theme.CARD, 0.18),
                             width=1)
+        # 胶囊左右边缘：左上受光亮边、右下背光暗边
+        left_edge = tk.Frame(capsule, width=theme.px(1),
+                             bg=theme.blend("#ffffff", theme.CARD, 0.20))
+        left_edge.place(x=0, y=0, relheight=1.0)
+        right_edge = tk.Frame(capsule, width=theme.px(1),
+                              bg=theme.blend("#000000", theme.CARD, 0.28))
+        right_edge.place(relx=1.0, x=-theme.px(1), y=0, relheight=1.0)
 
         row = tk.Frame(hero, bg=theme.BG)
         row.pack(fill="x", pady=(theme.px(10), 0))
@@ -1900,6 +1907,10 @@ class MainWindow(tk.Tk):
             if theme.ACRYLIC:
                 self.attributes("-alpha", 0.975)
                 frameless.enable_acrylic(self, True, 0xCC20150b)
+            elif theme.ACTIVE_PRESET == "glass":
+                # 液态玻璃：保留桌面透光，但不加磨砂模糊，保持清澈的折射感
+                self.attributes("-alpha", 0.94)
+                frameless.enable_acrylic(self, False)
             else:
                 self.attributes("-alpha", 1.0)
                 frameless.enable_acrylic(self, False)

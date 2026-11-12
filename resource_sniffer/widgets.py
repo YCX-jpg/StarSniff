@@ -61,21 +61,26 @@ def glass_surface(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
     # 顶边/左边反射，右下暗边
     canvas.create_line(x1 + radius * 0.65, y1 + p(1),
                        x2 - radius * 0.65, y1 + p(1),
-                       fill=theme.blend("#ffffff", base, 0.58),
+                       fill=theme.blend("#ffffff", base, 0.62),
                        width=max(1, p(1)), capstyle="round")
+    # 左上受光、右下背光的两条竖向边缘
     canvas.create_line(x1 + p(1), y1 + radius * 0.7,
                        x1 + p(1), y2 - radius * 0.7,
-                       fill=theme.blend("#ffffff", base, 0.18),
+                       fill=theme.blend("#ffffff", base, 0.22),
+                       width=1)
+    canvas.create_line(x2 - p(1), y1 + radius * 0.7,
+                       x2 - p(1), y2 - radius * 0.7,
+                       fill=theme.blend("#000000", base, 0.26),
                        width=1)
     canvas.create_line(x1 + radius * 0.7, y2 - p(1),
                        x2 - radius * 0.7, y2 - p(1),
-                       fill=theme.blend("#000000", base, 0.30),
+                       fill=theme.blend("#000000", base, 0.34),
                        width=1)
     if mode == "glass" and height > p(28):
         # 底部折射带：环境光从下方穿入，略带强调色
         band_top = y1 + height * 0.58
         band_bottom = y1 + height * 0.74
-        refracted = theme.blend(accent or theme.ACCENT, base, 0.10)
+        refracted = theme.blend(accent or theme.ACCENT, base, 0.13)
         canvas.create_polygon(
             x1 + inset + p(4), band_top,
             x2 - inset - p(4), band_top - p(2),
@@ -84,22 +89,22 @@ def glass_surface(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
             fill=refracted, outline="")
         canvas.create_line(x1 + inset + p(6), band_top,
                            x2 - inset - p(6), band_top - p(1),
-                           fill=theme.blend("#ffffff", base, 0.22), width=1)
+                           fill=theme.blend("#ffffff", base, 0.28), width=1)
         # 左上方镜面高光，随相位轻微漂移
         sx = x1 + width * (0.24 + 0.05 * math.sin(phase * math.tau))
         sy = y1 + height * 0.20
-        canvas.create_oval(sx - width * 0.09, sy - height * 0.055,
-                           sx + width * 0.09, sy + height * 0.055,
-                           fill=theme.blend("#ffffff", base, 0.08),
+        canvas.create_oval(sx - width * 0.09, sy - height * 0.06,
+                           sx + width * 0.09, sy + height * 0.06,
+                           fill=theme.blend("#ffffff", base, 0.105),
                            outline="")
         # 扫光：一条斜向的高光带，模拟玻璃转动时的反射
         sweep_x = x1 - width * 0.25 + (phase % 1.0) * width * 1.5
         canvas.create_polygon(
             sweep_x, y1 + p(2),
-            sweep_x + width * 0.06, y1 + p(2),
-            sweep_x + width * 0.16, y2 - p(2),
+            sweep_x + width * 0.07, y1 + p(2),
+            sweep_x + width * 0.17, y2 - p(2),
             sweep_x + width * 0.03, y2 - p(2),
-            fill=theme.blend("#ffffff", base, 0.035), outline="")
+            fill=theme.blend("#ffffff", base, 0.055), outline="")
     elif mode == "acrylic":
         # 亚克力：顶部雾光 + 很淡的竖向光泽，没有锐利折射
         canvas.create_rectangle(x1 + p(2), y1 + p(2),
