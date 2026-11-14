@@ -302,6 +302,64 @@ class Api:
         if not busy:
             self._emit({"type": "log", "text": "下载队列已清空"})
 
+    # ------------------------------------------------------------ 设置
+    def get_settings(self) -> dict:
+        from . import useragents
+
+        cfg = self.cfg
+        return {
+            "download_dir": self.download_dir,
+            "proxy": cfg.proxy,
+            "proxy_mode": cfg.proxy_mode,
+            "deep": bool(cfg.deep),
+            "dynamic": bool(cfg.dynamic),
+            "scroll": bool(cfg.scroll),
+            "workers": int(cfg.workers),
+            "concurrency": int(cfg.concurrency),
+            "segments": int(cfg.download_segments),
+            "user_agent": cfg.user_agent,
+            "auto_check_all": bool(cfg.auto_check_all),
+            "use_ytdlp": bool(cfg.use_ytdlp),
+            "ua_options": [[p.key, p.label] for p in useragents.PROFILES],
+        }
+
+    def save_settings(self, data: dict) -> dict:
+        cfg = self.cfg
+        data = data or {}
+
+        def _int(name: str, low: int, high: int, attr: str = "") -> None:
+            try:
+                value = int(data.get(name))
+            except (TypeError, ValueError):
+                return
+            setattr(cfg, attr or name, max(low, min(high, value)))
+
+        folder = str(data.get("download_dir") or "").strip()
+        if folder and os.path.isdir(folder):
+            self.download_dir = folder
+            cfg.download_dir = folder
+
+        cfg.proxy = str(data.get("proxy") or "").strip()
+        mode = str(data.get("proxy_mode") or "").strip()
+        if mode in ("auto", "proxy", "direct"):
+            cfg.proxy_mode = mode
+        _int("workers", 1, 16)
+        _int("concurrency", 1, 8)
+        _int("segments", 1, 8, "download_segments")
+
+        ua = str(data.get("user_agent") or "").strip()
+        if ua:
+            cfg.user_agent = ua
+
+        for key in ("deep", "dynamic", "scroll", "auto_check_all", "use_ytdlp"):
+            if key in data:
+                setattr(cfg, key, bool(data[key]))
+
+        cfgmod.save(cfg, self.base_dir)
+        self.downloader.segments = max(1, min(8, int(cfg.download_segments or 1)))
+        self._emit({"type": "log", "text": "设置已保存"})
+        return self.get_settings()
+
     # ------------------------------------------------------------ 其它
     def open_item(self, url: str) -> None:
         import webbrowser

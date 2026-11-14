@@ -253,6 +253,61 @@
     },
   };
 
+  /* ------------------------------------------------------- 设置面板 */
+  const modal = $("#settings");
+
+  async function openSettings() {
+    const api = window.pywebview?.api;
+    if (!api?.get_settings) return;
+    const cfg = await api.get_settings();
+    if (!cfg) return;
+    $("#s-dir").value = cfg.download_dir || "";
+    $("#s-proxy").value = cfg.proxy || "";
+    $("#s-mode").value = cfg.proxy_mode || "auto";
+    $("#s-workers").value = cfg.workers ?? 10;
+    $("#s-concurrency").value = cfg.concurrency ?? 4;
+    $("#s-segments").value = cfg.segments ?? 4;
+    const ua = $("#s-ua");
+    ua.innerHTML = (cfg.ua_options || []).map(
+      ([key, label]) => `<option value="${key}">${label}</option>`).join("");
+    ua.value = cfg.user_agent || "auto";
+    $("#s-deep").checked = !!cfg.deep;
+    $("#s-dynamic").checked = !!cfg.dynamic;
+    $("#s-scroll").checked = !!cfg.scroll;
+    $("#s-autocheck").checked = !!cfg.auto_check_all;
+    $("#s-ytdlp").checked = !!cfg.use_ytdlp;
+    modal.hidden = false;
+    $(".sheet").animate?.([], 0);
+  }
+
+  function closeSettings() {
+    if (modal) modal.hidden = true;
+  }
+
+  async function saveSettings() {
+    const api = window.pywebview?.api;
+    if (!api?.save_settings) return;
+    const payload = {
+      download_dir: $("#s-dir").value,
+      proxy: $("#s-proxy").value.trim(),
+      proxy_mode: $("#s-mode").value,
+      workers: Number($("#s-workers").value) || 10,
+      concurrency: Number($("#s-concurrency").value) || 4,
+      segments: Number($("#s-segments").value) || 4,
+      user_agent: $("#s-ua").value,
+      deep: $("#s-deep").checked,
+      dynamic: $("#s-dynamic").checked,
+      scroll: $("#s-scroll").checked,
+      auto_check_all: $("#s-autocheck").checked,
+      use_ytdlp: $("#s-ytdlp").checked,
+    };
+    const cfg = await api.save_settings(payload);
+    if (cfg?.download_dir) $("#path").textContent = cfg.download_dir;
+    closeSettings();
+    const status = $(".status");
+    if (status) status.textContent = "设置已保存";
+  }
+
   /* ------------------------------------------------------- 关窗动画 */
   let closing = false;
 
@@ -316,6 +371,25 @@
       return;
     }
 
+    if (act === "settings") {
+      await openSettings();
+      return;
+    }
+    if (act === "close-settings") {
+      closeSettings();
+      return;
+    }
+    if (act === "save-settings") {
+      await saveSettings();
+      return;
+    }
+    if (act === "pick-folder") {
+      const api = window.pywebview?.api;
+      const value = await api?.choose_folder?.();
+      if (typeof value === "string") $("#s-dir").value = value;
+      return;
+    }
+
     if (act === "close") {
       await closeWindow();
       return;
@@ -347,11 +421,14 @@
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (!$("#settings")?.hidden) return closeSettings();
+      $("#url")?.blur();
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
       $("#query").focus();
     }
-    if (event.key === "Escape") $("#url")?.blur();
   });
 
   /* ------------------------------------------------------- 性能模式 */

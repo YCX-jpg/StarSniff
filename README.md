@@ -17,9 +17,11 @@ Windows 桌面版的**剧集 / 网页媒体嗅探与下载**工具：输入网�
 
 ## 下载 / 安装
 
-* 普通用户（推荐）：到 [Releases](https://github.com/YCX-jpg/StarSniff/releases)
-  下载 `StarSniff-<版本>-win64.zip`，解压后双击文件夹里的 `StarSniff.exe`，
-  无需安装 Python。目录版启动快、不依赖系统临时目录。
+* **安装版（推荐）**：到 [Releases](https://github.com/YCX-jpg/StarSniff/releases)
+  下载 `StarSniff-<版本>-setup.exe`，运行后按提示选择安装位置即可。
+  已经装过再运行会定位到原目录，想换位置在同一个页面改就行（等于「更新 / 搬家」）。
+* 绿色版：下载 `StarSniff-<版本>-win64.zip`，解压后双击文件夹里的
+  `StarSniff.exe`，无需安装、不写注册表。
 * 也可以下载单文件 `StarSniff-portable.exe`（首次启动会解压，稍慢；
   若被杀毒软件拦截或提示“无法创建临时目录”，请改用 zip 目录版）。
 * 源码运行：安装 Python 3.9+ 后：

@@ -143,6 +143,91 @@
 
 </div>
 
+<!-- 设置面板 -->
+<div class="modal" id="settings" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="设置">
+    <header class="sheet-head">
+      <h2>设置</h2>
+      <button class="x" data-act="close-settings" title="关闭">✕</button>
+    </header>
+
+    <div class="sheet-body">
+      <section>
+        <h3>下载</h3>
+        <div class="rowline">
+          <label>保存目录</label>
+          <div class="inline">
+            <input id="s-dir" type="text" readonly>
+            <button class="ghost sm" data-act="pick-folder">更改</button>
+          </div>
+        </div>
+        <div class="rowline">
+          <label>并发下载</label>
+          <div class="inline">
+            <input id="s-concurrency" type="number" min="1" max="8">
+            <span class="unit">个文件</span>
+          </div>
+        </div>
+        <div class="rowline">
+          <label>单文件分片</label>
+          <div class="inline">
+            <input id="s-segments" type="number" min="1" max="8">
+            <span class="unit">段（大文件加速）</span>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h3>嗅探</h3>
+        <div class="rowline">
+          <label>线程数</label>
+          <div class="inline">
+            <input id="s-workers" type="number" min="1" max="16">
+            <span class="unit">并发解析</span>
+          </div>
+        </div>
+        <div class="rowline">
+          <label>User-Agent</label>
+          <select id="s-ua"></select>
+        </div>
+        <div class="rowline checks">
+          <label class="check"><input type="checkbox" id="s-deep"><span>深度嗅探</span></label>
+          <label class="check"><input type="checkbox" id="s-dynamic"><span>动态页面</span></label>
+          <label class="check"><input type="checkbox" id="s-scroll"><span>自动滚动</span></label>
+        </div>
+        <div class="rowline checks">
+          <label class="check"><input type="checkbox" id="s-autocheck"><span>嗅探后全选</span></label>
+          <label class="check"><input type="checkbox" id="s-ytdlp"><span>优先 yt-dlp</span></label>
+        </div>
+      </section>
+
+      <section>
+        <h3>网络</h3>
+        <div class="rowline">
+          <label>代理</label>
+          <input id="s-proxy" type="text" placeholder="http://127.0.0.1:7890（留空＝直连）">
+        </div>
+        <div class="rowline">
+          <label>代理模式</label>
+          <select id="s-mode">
+            <option value="auto">自动测速（推荐）</option>
+            <option value="proxy">强制走代理</option>
+            <option value="direct">强制直连</option>
+          </select>
+        </div>
+      </section>
+    </div>
+
+    <footer class="sheet-foot">
+      <span class="tip">改动立即生效，写入 config.json</span>
+      <div class="btns">
+        <button class="ghost" data-act="close-settings">取消</button>
+        <button class="primary" data-act="save-settings">保存</button>
+      </div>
+    </footer>
+  </div>
+</div>
+
 <script src="bridge.js"></script>
 <script src="app.js"></script>
 </body>
