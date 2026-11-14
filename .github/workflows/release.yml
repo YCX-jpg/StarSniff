@@ -79,13 +79,33 @@ jobs:
       - name: Package source zip
         shell: pwsh
         run: |
+          # robocopy 的退出码 1 表示"复制成功"，在 Actions 的 $ErrorActionPreference=stop
+          # 下会被当成失败，所以这里用纯 PowerShell 复制，不碰原生命令
           $ver = "${{ steps.version.outputs.value }}"
-          $stage = "dist/src/StarSniff-$ver"
+          $root = (Get-Location).Path
+          $stageName = "StarSniff-$ver"
+          $stage = Join-Path $root "dist/src/$stageName"
           New-Item -ItemType Directory -Force $stage | Out-Null
-          $exclude = @(".git", "dist", "build", "__pycache__", ".pytest_cache", "Releases")
-          robocopy . $stage /E /XD @exclude /XF *.pyc config.json StarSniff.log /NFL /NDL /NJH /NJS /NP
-          if ($LASTEXITCODE -ge 8) { throw "robocopy 打包源码失败：$LASTEXITCODE" }
-          $zip = "dist/StarSniff-$ver-source.zip"
+
+          $skipDirs = @('.git', 'dist', 'build', '__pycache__', '.pytest_cache', 'Releases', '_assets')
+          $skipExt = @('.pyc', '.log')
+          $skipFiles = @('config.json', 'StarSniff.log')
+
+          $copied = 0
+          Get-ChildItem -Force -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Substring($root.Length + 1)
+            $parts = $rel -split '[\\/]'
+            if ($parts | Where-Object { $skipDirs -contains $_ }) { return }
+            if ($skipExt -contains $_.Extension.ToLower()) { return }
+            if ($skipFiles -contains $_.Name) { return }
+            $dest = Join-Path $stage $rel
+            New-Item -ItemType Directory -Force (Split-Path -Parent $dest) | Out-Null
+            Copy-Item $_.FullName $dest -Force
+            $copied += 1
+          }
+          Write-Host "收集源码文件：$copied 个"
+
+          $zip = Join-Path $root "dist/StarSniff-$ver-source.zip"
           Compress-Archive -Path $stage -DestinationPath $zip -Force
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$hash  StarSniff-$ver-source.zip" | Set-Content "$zip.sha256" -Encoding ascii
