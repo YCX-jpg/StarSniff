@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 目录版打包配置：dist/StarSniff/StarSniff.exe。
 
-界面走「本地 HTTP 桥 + Edge 应用窗口」，所以不依赖 pythonnet / .NET；
+纯 Tk 界面（可选 Pillow 磨砂 / yt-dlp），不依赖 pythonnet / .NET；
 目录版不依赖 %TEMP% 解压，启动快，也不容易被杀毒误报。
 发布时整体压 zip（绿色版），Inno Setup 也复用这个目录做安装包。
 """
@@ -10,7 +10,6 @@ from pathlib import Path
 
 ROOT = Path(SPECPATH)
 ASSETS = ROOT / "assets"
-WEBUI = ROOT / "resource_sniffer" / "webui"
 
 a = Analysis(
     [str(ROOT / "app.py")],
@@ -19,10 +18,6 @@ a = Analysis(
     datas=[
         (str(ASSETS / "starsniff.png"), "assets"),
         (str(ASSETS / "starsniff.ico"), "assets"),
-        (str(WEBUI / "index.html"), "resource_sniffer/webui"),
-        (str(WEBUI / "app.css"), "resource_sniffer/webui"),
-        (str(WEBUI / "app.js"), "resource_sniffer/webui"),
-        (str(WEBUI / "bridge.js"), "resource_sniffer/webui"),
     ],
     hiddenimports=[
         "PIL.Image",

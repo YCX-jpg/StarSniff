@@ -575,27 +575,25 @@ def test_units() -> None:
     # 视觉主题 / 圆角 / 主题色
     from resource_sniffer import theme as theme_mod
 
-    check("内置 5 套视觉预设",
-          set(theme_mod.PRESET_KEYS) == {"default", "acrylic", "glass",
-                                         "neon", "retro"},
+    check("内置 3 套视觉预设",
+          set(theme_mod.PRESET_KEYS) == {"acrylic", "retro", "perf"},
           ", ".join(theme_mod.PRESET_KEYS))
     theme_mod.apply_style("retro", "#34d399", 0, 0, True)
     check("复古主题切换为浅色直角",
           theme_mod.CLASSIC and theme_mod.BG == "#d4d0c8"
           and theme_mod.RADIUS_BUTTON == 0,
           f"{theme_mod.BG} / r={theme_mod.RADIUS_BUTTON}")
-    theme_mod.apply_style("glass", "#f472b6", 18, 22, False)
+    theme_mod.apply_style("perf", "#f472b6", 18, 22, False)
     check("主题色 / 按钮圆角 / 窗口圆角生效",
           theme_mod.ACCENT == "#f472b6" and theme_mod.RADIUS_BUTTON == 18
           and theme_mod.RADIUS_WINDOW == 22 and not theme_mod.ANIMATIONS,
           f"{theme_mod.ACCENT} / {theme_mod.RADIUS_BUTTON} / "
           f"{theme_mod.RADIUS_WINDOW}")
-    check("液态玻璃使用独立布局与卡片列表",
-          theme_mod.LAYOUT["shell"] == "floating"
-          and theme_mod.LAYOUT["list"] == "cards"
-          and theme_mod.LAYOUT["traffic_lights"] is True
-          and theme_mod.MOTION == "spring",
-          f"{theme_mod.LAYOUT['shell']} / {theme_mod.LAYOUT['list']}")
+    check("性能主题使用标准布局且无动画",
+          theme_mod.LAYOUT["shell"] == "standard"
+          and theme_mod.LAYOUT["motion"] == "none"
+          and theme_mod.LAYOUT["list"] == "rows",
+          f"{theme_mod.LAYOUT['shell']} / {theme_mod.LAYOUT['motion']}")
     theme_mod.apply_style("acrylic", "", None, None, True)
     check("亚克力使用左侧导航布局",
           theme_mod.LAYOUT["shell"] == "sidebar"
@@ -606,12 +604,12 @@ def test_units() -> None:
           theme_mod.LAYOUT["header"] == "menu"
           and theme_mod.LAYOUT["footer"] == "status",
           f"{theme_mod.LAYOUT['header']} / {theme_mod.LAYOUT['footer']}")
-    check("五套主题的布局规格不完全相同",
+    check("三套主题的布局规格不完全相同",
           len({tuple(sorted((k, str(v)) for k, v in
                             theme_mod.LAYOUTS[key].items()))
-               for key in theme_mod.PRESET_KEYS}) == 5,
+               for key in theme_mod.PRESET_KEYS}) == 3,
           "layouts unique")
-    theme_mod.apply_style("default", "", 10, 0, True)
+    theme_mod.apply_style("acrylic", "", 10, 0, True)
 
     # 应用图标（exe / 窗口图标共用）
     ico_path = os.path.join(ROOT, "assets", "starsniff.ico")

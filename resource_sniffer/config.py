@@ -32,11 +32,11 @@ _FLOAT_RANGES = {
 }
 _BOOL_FIELDS = ("dynamic", "deep", "scroll", "headless",
                 "auto_check_all", "animations", "use_ytdlp",
-                "check_updates")
+                "check_updates", "auto_update_ytdlp", "auto_update_app")
 _STR_FIELDS = ("download_dir", "proxy", "cookie", "browser_path",
-               "user_agent", "window_geometry", "theme_preset", "accent",
+               "user_agent", "window_geometry", "theme_preset", "theme_dark", "accent",
                "skipped_version")
-THEME_PRESETS = ("default", "acrylic", "glass", "neon", "retro")
+THEME_PRESETS = ("acrylic", "retro", "perf")
 
 
 def app_dir() -> str:
@@ -116,14 +116,17 @@ class Config:
     download_segments: int = 4       # 大文件单文件多连接数（1 = 关闭加速）
     user_agent: str = "auto"          # UA 伪装配置 key（见 useragents）
     window_geometry: str = ""         # 上次窗口位置/大小，如 1080x720+100+50
-    theme_preset: str = "default"     # 视觉预设（见 theme.PRESETS）
+    theme_preset: str = "acrylic"     # 视觉预设（见 theme.PRESETS）
+    theme_dark: bool = False          # 同主题的深色变体（三套主题都支持明暗）
     accent: str = ""                  # 自定义主题色，空 = 跟随预设
     radius_button: int = 10            # 按钮圆角（96 DPI 基准）
     radius_window: int = 0             # 窗口圆角（96 DPI 基准）
     animations: bool = True            # 悬停/主题切换动画
     anim_fps: int = 60                 # 动画帧率（5–120 FPS）
     use_ytdlp: bool = True             # 优先尝试 yt-dlp（若已安装）
-    check_updates: bool = True         # 启动时检查 GitHub Release
+    auto_update_ytdlp: bool = True     # 启动时自动更新 yt-dlp
+    auto_update_app: bool = True       # 启动时检查软件更新
+    check_updates: bool = True         # 兼容旧字段：是否检查更新    check_updates: bool = True         # 启动时检查 GitHub Release
     skipped_version: str = ""          # 用户选择跳过的版本
 
     # -------------------------------------------------------------- 持久化
@@ -151,12 +154,15 @@ class Config:
             "user_agent": self.user_agent,
             "window_geometry": self.window_geometry,
             "theme_preset": self.theme_preset,
+            "theme_dark": bool(self.theme_dark),
             "accent": self.accent,
             "radius_button": self.radius_button,
             "radius_window": self.radius_window,
             "animations": self.animations,
             "anim_fps": self.anim_fps,
             "use_ytdlp": self.use_ytdlp,
+            "auto_update_ytdlp": bool(self.auto_update_ytdlp),
+            "auto_update_app": bool(self.auto_update_app),
             "check_updates": self.check_updates,
             "skipped_version": self.skipped_version,
         }
@@ -192,7 +198,7 @@ class Config:
             else:
                 setattr(cfg, key, value)
         if cfg.theme_preset not in THEME_PRESETS:
-            cfg.theme_preset = "default"
+            cfg.theme_preset = "acrylic"
         accent = (cfg.accent or "").strip()
         if accent:
             value = accent.lstrip("#")

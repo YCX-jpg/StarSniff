@@ -472,6 +472,16 @@ class BrowserSession:
                     self.proc.kill()
                 except Exception:
                     pass
+            # Chromium 会拉起一堆子进程（渲染/GPU/Zygote），只 terminate 主进程
+            # 的话它们会留下来继续吃显存，所以按进程树整棵杀掉。
+            try:
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/T", "/F", "/PID", str(self.proc.pid)],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=8)
+            except Exception:
+                pass
         self._cleanup_profile()
 
     def _cleanup_profile(self) -> None:

@@ -57,9 +57,40 @@ jobs:
         shell: pwsh
         run: python tests/selftest.py
 
-      - name: Build exe and zip
+      - name: Ensure Inno Setup
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "runner 上没有 Inno Setup，开始安装"
+            choco install innosetup -y --no-progress
+          } else {
+            Write-Host "已有 Inno Setup: $iscc"
+          }
+
+      - name: Build exe, zip, portable and setup
         shell: pwsh
         run: ./build_exe.ps1 -SkipTests
+
+      - name: Package source zip
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.version.outputs.value }}"
+          $stage = "dist/src/StarSniff-$ver"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          $exclude = @(".git", "dist", "build", "__pycache__", ".pytest_cache", "Releases")
+          robocopy . $stage /E /XD @exclude /XF *.pyc config.json StarSniff.log /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy 打包源码失败：$LASTEXITCODE" }
+          $zip = "dist/StarSniff-$ver-source.zip"
+          Compress-Archive -Path $stage -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  StarSniff-$ver-source.zip" | Set-Content "$zip.sha256" -Encoding ascii
+          Write-Host "源码包：$zip"
+          Get-ChildItem dist | Select-Object Name, Length | Format-Table -AutoSize
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -67,9 +98,13 @@ jobs:
           name: StarSniff-windows
           path: |
             dist/StarSniff-*-win64.zip
-            dist/*.sha256
+            dist/StarSniff-*-win64.zip.sha256
             dist/StarSniff-portable.exe
+            dist/StarSniff-portable.exe.sha256
             dist/StarSniff-*-setup.exe
+            dist/StarSniff-*-setup.exe.sha256
+            dist/StarSniff-*-source.zip
+            dist/StarSniff-*-source.zip.sha256
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -83,7 +118,9 @@ jobs:
             dist/StarSniff-portable.exe.sha256
             dist/StarSniff-*-setup.exe
             dist/StarSniff-*-setup.exe.sha256
-          generate_release_notes: true
+            dist/StarSniff-*-source.zip
+            dist/StarSniff-*-source.zip.sha256
+          generate_release_notes: false
           fail_on_unmatched_files: true
           body: |
             ## StarSniff ${{ github.ref_name }}
@@ -91,9 +128,12 @@ jobs:
             **推荐**：下载 `StarSniff-*-win64.zip`，解压后双击文件夹里的
             `StarSniff.exe`。目录版启动快，不依赖系统临时目录。
 
-            也可以下载单文件 `StarSniff-portable.exe`，首次启动会解压、稍慢；
-            如果遇到杀毒软件拦截或“无法创建临时目录”，请改用 zip 目录版。
+            其他文件：
+            - `StarSniff-*-setup.exe`：安装程序，可选安装位置，装过再运行即原地更新
+            - `StarSniff-portable.exe`：单文件便携版（会解压到 %TEMP%，个别杀软会拦）
+            - `StarSniff-*-source.zip`：源码包，想自己改/自己打包用
+            - `*.sha256`：校验值，`certutil -hashfile 文件 SHA256` 核对
 
-            校验文件：`*.sha256`
+            官网会**自动指向最新版本**，不用改页面。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

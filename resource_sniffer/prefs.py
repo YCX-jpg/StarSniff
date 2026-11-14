@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 
-from . import frameless, smartproxy, theme, updater, useragents
+from . import frameless, motion, smartproxy, theme, updater, useragents
 from . import ytdlp
 from . import __version__ as APP_VERSION
 from .config import Config
@@ -22,7 +23,9 @@ class ThemeCard(tk.Canvas):
     """主题预设卡片：迷你窗口缩略图 + 名称 + 选中描边。"""
 
     def __init__(self, master, key: str, command: Callable[[str], None],
-                 width: int = 116, height: int = 88):
+                 width: int = 0, height: int = 0):
+        width = width or theme.px(116)
+        height = height or theme.px(104)
         super().__init__(master, width=width, height=height, bg=theme.BG,
                          highlightthickness=0, bd=0, cursor="hand2",
                          takefocus=0)
@@ -50,14 +53,17 @@ class ThemeCard(tk.Canvas):
 
         self.delete("all")
         p = theme.px
-        data = theme.palette_for(self._key)
+        data = theme.palette_for(self._key, dark=theme.DARK_UI)
         colors = data["colors"]
         radius = p(min(8, data.get("window_radius", 6)))
-        preview_bottom = self._bh - p(20)
+        preview_bottom = self._bh - p(30)
         # 先铺这张主题自己的壁纸，缩略图就能看出各主题的壁纸差异
         paint_wallpaper(self, self._bw, preview_bottom,
                         spec=data.get("wallpaper"), tag="wall",
                         win=(self._bw, preview_bottom))
+        # 壁纸按行铺，最后一行会超出 preview_bottom，用底色盖掉，给标签留出干净背景
+        self.create_rectangle(0, preview_bottom, self._bw, self._bh,
+                              fill=theme.BG, outline="")
         outline = theme.ACCENT if self._selected else (
             theme.BORDER_LIGHT if self._hover else theme.BORDER)
         width = max(2, p(2)) if self._selected else 1
@@ -148,7 +154,8 @@ class MiniSlider(tk.Canvas):
 
 class _Swatch(tk.Canvas):
     def __init__(self, master, color: str, command: Callable[[str], None],
-                 size: int = 22):
+                 size: int = 0):
+        size = size or theme.px(22)
         super().__init__(master, width=size, height=size, bg=theme.BG,
                          highlightthickness=0, bd=0, cursor="hand2",
                          takefocus=0)
@@ -176,6 +183,273 @@ class _Swatch(tk.Canvas):
                              width=max(2, p(2)), capstyle="round")
 
 
+class ToggleSwitch(tk.Canvas):
+    """现代滑动开关：圆角轨道 + 圆形滑块，点击切换绑定的 BooleanVar。"""
+
+    def __init__(self, master, variable: tk.BooleanVar,
+                 command: Optional[Callable[[], None]] = None):
+        self._tw = theme.px(46)
+        self._th = theme.px(24)
+        super().__init__(master, width=self._tw, height=self._th,
+                         bg=theme.BG, highlightthickness=0, bd=0,
+                         cursor="hand2", takefocus=0)
+        self._var = variable
+        self._command = command
+        self._pos = 1.0 if bool(variable.get()) else 0.0
+        self._job = None
+        self._hover = False
+        self.bind("<Button-1>", lambda _e: self.invoke())
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        variable.trace_add("write", lambda *_: self._animate())
+        self._draw()
+
+    # -- 交互 ----------------------------------------------------------
+    def invoke(self) -> None:
+        try:
+            self._var.set(not bool(self._var.get()))
+        except tk.TclError:
+            return
+        if self._command is not None:
+            self._command()
+
+    def _set_hover(self, value: bool) -> None:
+        self._hover = value
+        self._draw()
+
+    def _animate(self) -> None:
+        self._cancel()
+        target = 1.0 if bool(self._var.get()) else 0.0
+        if not theme.ANIMATIONS:
+            self._pos = target
+            self._draw()
+            return
+        self._step()
+
+    def _step(self) -> None:
+        target = 1.0 if bool(self._var.get()) else 0.0
+        delta = target - self._pos
+        if abs(delta) <= 0.02:
+            self._pos = target
+            self._job = None
+            self._draw()
+            return
+        self._pos += delta * 0.45
+        self._draw()
+        try:
+            self._job = self.after(theme.frame_delay(), self._step)
+        except tk.TclError:
+            self._job = None
+
+    def _cancel(self) -> None:
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except tk.TclError:
+                pass
+            self._job = None
+
+    def destroy(self) -> None:  # noqa: D401 - Tk 生命周期
+        self._cancel()
+        super().destroy()
+
+    # -- 绘制 ----------------------------------------------------------
+    def _draw(self) -> None:
+        from .widgets import round_rect
+
+        self.delete("all")
+        w, h = self._tw, self._th
+        pad = max(1, theme.px(1))
+        on = bool(self._var.get())
+        if on:
+            track = theme.ACCENT_HOVER if self._hover else theme.ACCENT
+        else:
+            track = theme.BORDER_LIGHT if self._hover else theme.BORDER
+        round_rect(self, pad, pad, w - pad, h - pad, (h - 2 * pad) / 2,
+                   fill=track, outline="")
+        d = h - 2 * pad - theme.px(4)
+        span = max(0, int(w - 2 * pad - theme.px(4) - d))
+        x0 = pad + theme.px(2) + span * max(0.0, min(1.0, self._pos))
+        y0 = (h - d) / 2
+        self.create_oval(x0, y0, x0 + d, y0 + d, fill="#ffffff",
+                         outline=theme.blend("#000000", "#ffffff", 0.14),
+                         width=1)
+
+
+class _ProgressBar(tk.Canvas):
+    """细进度条：圆角轨道 + 主色填充，值域 0.0–1.0，带平滑过渡。"""
+
+    def __init__(self, master, height: int = 8):
+        self._h = theme.px(height)
+        super().__init__(master, height=self._h, bg=theme.BG,
+                         highlightthickness=0, bd=0)
+        self._value = 0.0
+        self._shown = 0.0
+        self._job = None
+        self.bind("<Configure>", lambda _e: self._draw())
+
+    def set(self, fraction: float, animate: bool = True) -> None:
+        try:
+            self._value = max(0.0, min(1.0, float(fraction)))
+        except (TypeError, ValueError):
+            self._value = 0.0
+        if not animate or not theme.ANIMATIONS:
+            self._shown = self._value
+            self._draw()
+            return
+        if self._job is None:
+            self._step()
+
+    def _step(self) -> None:
+        self._job = None
+        delta = self._value - self._shown
+        if abs(delta) <= 0.004:
+            self._shown = self._value
+            self._draw()
+            return
+        self._shown += delta * 0.4
+        self._draw()
+        try:
+            self._job = self.after(16, self._step)
+        except tk.TclError:
+            self._job = None
+
+    def _draw(self) -> None:
+        from .widgets import round_rect
+
+        try:
+            self.delete("all")
+        except tk.TclError:
+            return
+        width = max(self.winfo_width(), 1)
+        height = self._h
+        radius = height / 2
+        round_rect(self, 0, 0, width, height, radius,
+                   fill=theme.SEGMENT_BG, outline="")
+        if self._shown > 0.002:
+            filled = max(height, width * self._shown)
+            round_rect(self, 0, 0, filled, height, radius,
+                       fill=theme.ACCENT, outline="")
+
+
+class ScrollPane(tk.Frame):
+    """可滚动的设置页：Canvas + 细滚动条 + 鼠标滚轮。"""
+
+    def __init__(self, master):
+        from .widgets import SlimScrollbar
+
+        super().__init__(master, bg=theme.BG)
+        self.canvas = tk.Canvas(self, bg=theme.BG, highlightthickness=0, bd=0)
+        self.bar = SlimScrollbar(self, command=self._scroll,
+                                 width=theme.px(8))
+        self.bar.configure(bg=theme.BG)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.bar.pack(side="right", fill="y", padx=(theme.px(4), 0))
+        self.body = tk.Frame(self.canvas, bg=theme.BG)
+        self._win = self.canvas.create_window(0, 0, window=self.body,
+                                              anchor="nw")
+        self.canvas.configure(yscrollcommand=self.bar.set)
+        # 平滑滚动状态
+        self._scroll_job = None
+        self._scroll_t0 = 0.0
+        self._scroll_from = 0.0
+        self._scroll_goal = 0.0
+        self._scroll_total = 1.0
+        self.body.bind("<Configure>", self._sync_region)
+        self.canvas.bind("<Configure>", self._on_resize)
+        self.bind_wheel()
+
+    def _on_resize(self, event) -> None:
+        self.canvas.itemconfigure(self._win, width=max(1, event.width))
+        self._sync_region()
+
+    def _sync_region(self, _event=None) -> None:
+        bbox = self.canvas.bbox("all")
+        self.canvas.configure(scrollregion=bbox or (0, 0, 0, 0))
+
+    def _scroll(self, what: str, value) -> None:
+        try:
+            if what == "moveto":
+                self.canvas.yview_moveto(float(value))
+            elif what == "scroll":
+                self.canvas.yview_scroll(int(value), "units")
+        except (tk.TclError, ValueError):
+            pass
+
+    def _on_wheel(self, event):
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            return "break"
+        total = max(1, bbox[3] - bbox[1])
+        view = max(1, self.canvas.winfo_height())
+        if total <= view + 2:
+            return "break"
+        step = -1 if event.delta > 0 else 1
+        base = (self._scroll_goal if self._scroll_job is not None
+                else self.canvas.canvasy(0))
+        self._scroll_to(base + step * theme.px(56))
+        return "break"
+
+    # ---- 平滑滚动：滚过去而不是一帧跳过去
+    SCROLL_TIME = 0.15
+
+    def _cancel_scroll(self) -> None:
+        if self._scroll_job is not None:
+            try:
+                self.after_cancel(self._scroll_job)
+            except tk.TclError:
+                pass
+            self._scroll_job = None
+
+    def _scroll_to(self, target: float, animate: bool = True) -> None:
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            return
+        total = max(1, bbox[3] - bbox[1])
+        view = max(1, self.canvas.winfo_height())
+        target = max(0.0, min(total - view, target))
+        self._cancel_scroll()
+        if not animate or not theme.ANIMATIONS:
+            self._move_to(target, total)
+            return
+        self._scroll_from = self.canvas.canvasy(0)
+        if abs(target - self._scroll_from) < 1.0:
+            return
+        self._scroll_goal = target
+        self._scroll_total = total
+        self._scroll_t0 = time.monotonic()
+        self._scroll_tick()
+
+    def _move_to(self, y: float, total: float) -> None:
+        try:
+            self.canvas.yview_moveto(max(0.0, min(1.0, y / max(1.0, total))))
+        except tk.TclError:
+            pass
+
+    def _scroll_tick(self) -> None:
+        self._scroll_job = None
+        elapsed = (time.monotonic() - self._scroll_t0) / self.SCROLL_TIME
+        if elapsed >= 1.0:
+            self._move_to(self._scroll_goal, self._scroll_total)
+            return
+        eased = 1.0 - (1.0 - elapsed) ** 3
+        y = self._scroll_from + (self._scroll_goal - self._scroll_from) * eased
+        self._move_to(y, self._scroll_total)
+        try:
+            self._scroll_job = self.after(16, self._scroll_tick)
+        except tk.TclError:
+            self._scroll_job = None
+
+    def bind_wheel(self, widget=None) -> None:
+        widget = widget or self.body
+        try:
+            widget.bind("<MouseWheel>", self._on_wheel, add="+")
+        except tk.TclError:
+            return
+        for child in widget.winfo_children():
+            self.bind_wheel(child)
+
+
 class UpdateDialog(tk.Toplevel):
     """发现新版本时的应用内提示（不自动替换正在运行的程序）。"""
 
@@ -185,6 +459,10 @@ class UpdateDialog(tk.Toplevel):
         self.overrideredirect(True)
         self.title("发现新版本")
         self.configure(bg=theme.BG)
+        try:
+            self.attributes("-alpha", 0.0)     # 等界面搭好再淡入
+        except tk.TclError:
+            pass
         self.info = info
         self.cfg = config
         self.on_save = on_save
@@ -207,6 +485,8 @@ class UpdateDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _e: self._close())
         self.update_idletasks()
         self._center_on(master)
+        self.after(30, lambda: motion.open_window(self, dy=theme.px(10),
+                                                  duration=160, target=1.0))
 
     def _build(self) -> None:
         bar = tk.Frame(self, bg=theme.TITLE_BG, height=theme.px(40))
@@ -305,7 +585,14 @@ class UpdateDialog(tk.Toplevel):
         if self._closing:
             return
         self._closing = True
-        self.destroy()
+        motion.close_window(self, self._finish_close, dy=theme.px(6),
+                            duration=120)
+
+    def _finish_close(self) -> None:
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
     def _center_on(self, master) -> None:
         try:
@@ -329,6 +616,10 @@ class SettingsDialog(tk.Toplevel):
         self.overrideredirect(True)
         self.title("设置")
         self.configure(bg=theme.BG)
+        try:
+            self.attributes("-alpha", 0.0)     # 等界面搭好再淡入
+        except tk.TclError:
+            pass
         self.cfg = config
         self.on_apply = on_apply
         self.on_save = on_save or (lambda: None)
@@ -383,10 +674,10 @@ class SettingsDialog(tk.Toplevel):
         self._show_page("appearance")
         self.update_idletasks()
         self._center_on(master)
-        # 先让窗口完成映射/置前，再在下一帧抓取输入。
-        # 如果在这里立刻 grab_set()，窗口尚未显示时主界面会被 grab 住，
-        # 表现就是“点设置直接卡死”。
-        self.after(30, self._activate_window)
+        # 先让窗口完成映射/置前，再在下一帧开始淡入（不做 modal，主界面照常可用）
+        self.after(20, self._activate_window)
+        self.after(40, lambda: motion.open_window(self, dy=theme.px(10),
+                                                  duration=170, target=1.0))
 
     # ------------------------------------------------------------------ 外壳
     def _build_titlebar(self) -> None:
@@ -431,15 +722,16 @@ class SettingsDialog(tk.Toplevel):
         self._content = tk.Frame(body, bg=theme.BG)
         self._content.pack(side="left", fill="both", expand=True,
                            padx=theme.px(12), pady=theme.px(10))
-        self._pages: dict[str, tk.Frame] = {}
+        self._pages: dict[str, ScrollPane] = {}
         for key, builder in (("appearance", self._build_appearance),
                              ("sniff", self._build_sniff),
                              ("network", self._build_network),
                              ("download", self._build_download),
                              ("about", self._build_about)):
-            page = tk.Frame(self._content, bg=theme.BG)
-            builder(page)
-            self._pages[key] = page
+            pane = ScrollPane(self._content)
+            builder(pane.body)
+            pane.bind_wheel()
+            self._pages[key] = pane
         footer = tk.Frame(self, bg=theme.BG)
         footer.pack(fill="x", side="bottom", before=body)
         tk.Frame(footer, bg=theme.BORDER, height=1).pack(fill="x")
@@ -466,6 +758,10 @@ class SettingsDialog(tk.Toplevel):
                 page.pack(fill="both", expand=True)
             else:
                 page.pack_forget()
+        pane = self._pages.get(key)
+        if pane is not None:
+            pane.bind_wheel()
+            pane._sync_region()
         for name, lbl in self._nav.items():
             active = name == key
             lbl.configure(bg=theme.SEGMENT_ACTIVE if active else theme.BG,
@@ -501,6 +797,23 @@ class SettingsDialog(tk.Toplevel):
             card.pack(side="left", padx=(0, theme.px(8)))
             self._cards[key] = card
 
+        # 深浅变体：每套主题都有明暗两版
+        self.var_dark = tk.BooleanVar(
+            value=bool(getattr(self.cfg, "theme_dark", False)))
+        self._toggle(page, "深色主题", self.var_dark,
+                     hint="关掉即为该主题的浅色版本，标题栏一起变",
+                     command=self._dark_changed)
+
+        self.var_auto_ytdlp = tk.BooleanVar(
+            value=bool(getattr(self.cfg, "auto_update_ytdlp", True)))
+        self.var_auto_app = tk.BooleanVar(
+            value=bool(getattr(self.cfg, "auto_update_app", True)))
+        self._heading(page, "自动更新")
+        self._toggle(page, "启动时自动更新 yt-dlp", self.var_auto_ytdlp,
+                     hint="静默拉取官方最新版；下载失败不影响正常使用")
+        self._toggle(page, "启动时检查软件更新", self.var_auto_app,
+                     hint="发现更高版本才提醒，不会自动替换程序")
+
         self._heading(page, "主题色")
         swatch_row = tk.Frame(page, bg=theme.BG)
         swatch_row.pack(fill="x")
@@ -519,13 +832,9 @@ class SettingsDialog(tk.Toplevel):
         self._radius_row(page, "按钮圆角", self.var_radius_button, 0, 28)
         self._radius_row(page, "窗口圆角", self.var_radius_window, 0, 30)
 
-        anim = tk.Checkbutton(
-            page, text="启用悬停 / 主题切换动画", variable=self.var_animations,
-            bg=theme.BG, fg=theme.FG_DIM, selectcolor=theme.CARD,
-            activebackground=theme.BG, activeforeground=theme.FG,
-            font=theme.FONT_SMALL, bd=0, highlightthickness=0, cursor="hand2",
-            command=self._schedule_preview)
-        anim.pack(anchor="w", pady=(theme.px(2), 0))
+        self._toggle(page, "启用悬停 / 主题切换动画", self.var_animations,
+                     hint="关闭后切换更快，也不占用显卡",
+                     command=self._schedule_preview)
 
         fps_row = tk.Frame(page, bg=theme.BG)
         fps_row.pack(fill="x", pady=(theme.px(4), 0))
@@ -571,7 +880,8 @@ class SettingsDialog(tk.Toplevel):
 
     def _refresh_appearance(self) -> None:
         preset = self.var_preset.get()
-        data = theme.palette_for(preset, self.var_accent.get())
+        data = theme.palette_for(preset, self.var_accent.get(),
+                                 dark=bool(self.var_dark.get()))
         for key, card in self._cards.items():
             card.set_selected(key == preset)
         accent = (self.var_accent.get() or data["accent"]).lower()
@@ -579,11 +889,15 @@ class SettingsDialog(tk.Toplevel):
             swatch.set_selected(swatch._color.lower() == accent)
 
     def _choose_preset(self, key: str) -> None:
-        data = theme.PRESETS.get(key) or theme.PRESETS["default"]
+        data = theme.PRESETS.get(key) or theme.PRESETS["acrylic"]
         self.var_preset.set(key)
         self.var_accent.set("")
         self.var_radius_button.set(int(data.get("button_radius", 10)))
         self.var_radius_window.set(int(data.get("window_radius", 0)))
+        self._refresh_appearance()
+        self._schedule_preview()
+
+    def _dark_changed(self) -> None:
         self._refresh_appearance()
         self._schedule_preview()
 
@@ -600,10 +914,11 @@ class SettingsDialog(tk.Toplevel):
         self._schedule_preview()
 
     def _reset_appearance(self) -> None:
-        self.var_preset.set("default")
+        self.var_preset.set("acrylic")
         self.var_accent.set("")
-        self.var_radius_button.set(10)
-        self.var_radius_window.set(0)
+        self.var_dark.set(bool(getattr(self.cfg, "theme_dark", False)))
+        self.var_radius_button.set(14)
+        self.var_radius_window.set(18)
         self.var_animations.set(True)
         self.var_anim_fps.set(60)
         self._refresh_appearance()
@@ -626,7 +941,8 @@ class SettingsDialog(tk.Toplevel):
         canvas = getattr(self, "preview", None)
         if canvas is None:
             return
-        data = theme.palette_for(self.var_preset.get(), self.var_accent.get())
+        data = theme.palette_for(self.var_preset.get(), self.var_accent.get(),
+                                 dark=bool(self.var_dark.get()))
         colors = data["colors"]
         p = theme.px
         import math
@@ -739,12 +1055,15 @@ class SettingsDialog(tk.Toplevel):
     # ------------------------------------------------------------------ 嗅探页
     def _build_sniff(self, page) -> None:
         self._heading(page, "嗅探方式")
-        for text, var in (
-                ("动态嗅探（无头浏览器，能抓到 JS 异步加载的资源）", self.var_dynamic),
-                ("深度解析（CSS / JS / JSON 里的直链）", self.var_deep),
-                ("自动滚动页面触发懒加载", self.var_scroll),
-                ("后台静默模式（不显示浏览器窗口）", self.var_headless)):
-            self._check(page, text, var).pack(anchor="w", pady=1)
+        for text, hint, var in (
+                ("动态嗅探", "无头浏览器，能抓到 JS 异步加载的资源",
+                 self.var_dynamic),
+                ("深度解析", "CSS / JS / JSON 里的直链也一并提取",
+                 self.var_deep),
+                ("自动滚动页面", "触发懒加载，抓得更全但要等更久",
+                 self.var_scroll),
+                ("后台静默模式", "不显示浏览器窗口", self.var_headless)):
+            self._toggle(page, text, var, hint=hint)
 
         self._heading(page, "参数")
         row = tk.Frame(page, bg=theme.BG)
@@ -768,8 +1087,8 @@ class SettingsDialog(tk.Toplevel):
                  fg=theme.FG_FAINT, font=theme.FONT_SMALL).pack(side="left")
 
         self._heading(page, "yt-dlp")
-        self._check(page, "优先使用 yt-dlp（支持时列出剧集/清晰度）",
-                    self.var_ytdlp).pack(anchor="w")
+        self._toggle(page, "优先使用 yt-dlp", self.var_ytdlp,
+                     hint="支持时能列出剧集与清晰度")
 
         yt_row = tk.Frame(page, bg=theme.BG)
         yt_row.pack(fill="x", pady=(theme.px(4), 0))
@@ -786,6 +1105,10 @@ class SettingsDialog(tk.Toplevel):
             activebackground=theme.CARD_HOVER, activeforeground=theme.FG,
             cursor="hand2", command=self._download_ytdlp)
         self.btn_ytdlp.pack(side="right", padx=(theme.px(8), 0))
+
+        # 下载进度条：只有真的在下载时才推进，完成后保持满格
+        self.ytdlp_progress = _ProgressBar(page)
+        self.ytdlp_progress.pack(fill="x", pady=(theme.px(8), theme.px(10)))
 
         tk.Label(page, text="点「一键下载」会从 GitHub 拉取官方 yt-dlp.exe 到软件目录；"
                             "下载期间可继续操作，完成后立即启用。",
@@ -814,6 +1137,10 @@ class SettingsDialog(tk.Toplevel):
         self._ytdlp_cancel = threading.Event()
         self.btn_ytdlp.configure(text="下载中…", state="disabled")
         self.ytdlp_status.configure(text="正在连接 GitHub…", fg=theme.FG_DIM)
+        try:
+            self.ytdlp_progress.set(0.0, animate=False)
+        except (AttributeError, tk.TclError):
+            pass
         proxy = ""
         direct = False
         try:
@@ -851,6 +1178,7 @@ class SettingsDialog(tk.Toplevel):
                 _, done, total = payload
                 if total:
                     text = f"下载中 {done * 100 // total}%（{done / 1048576:.1f} MB）"
+                    self.ytdlp_progress.set(done / total)
                 else:
                     text = f"下载中 {done / 1048576:.1f} MB"
                 self.ytdlp_status.configure(text=text, fg=theme.FG_DIM)
@@ -859,6 +1187,7 @@ class SettingsDialog(tk.Toplevel):
                 return
             self._ytdlp_downloading = False
             if payload[0] == "done":
+                self.ytdlp_progress.set(1.0)
                 self.var_ytdlp.set(True)
                 self.cfg.use_ytdlp = True
                 self.on_save()
@@ -869,6 +1198,7 @@ class SettingsDialog(tk.Toplevel):
             else:
                 self.ytdlp_status.configure(
                     text="下载失败：" + str(payload[1])[:120], fg=theme.ERROR)
+                self.ytdlp_progress.set(0.0, animate=False)
                 self._refresh_ytdlp_status()
         except tk.TclError:
             pass
@@ -1035,10 +1365,9 @@ class SettingsDialog(tk.Toplevel):
                  wraplength=theme.px(420)).pack(fill="x",
                                                 pady=(theme.px(2), 0))
 
-        self._check(page, "启动时自动检查更新（立即生效）",
-                    self.var_check_updates,
-                    command=self._auto_update_changed).pack(
-            anchor="w", pady=(theme.px(6), 0))
+        self._toggle(page, "启动时自动检查更新", self.var_check_updates,
+                     hint="立即生效，不必等「应用」",
+                     command=self._auto_update_changed)
 
         self._heading(page, "发布与反馈")
         repo = tk.Label(page, text="github.com/YCX-jpg/StarSniff",
@@ -1186,17 +1515,44 @@ class SettingsDialog(tk.Toplevel):
         return path if len(path) <= limit else path[:14] + "…" + path[-limit + 16:]
 
     # ------------------------------------------------------------------ 通用
+    def _toggle(self, parent, text: str, var: tk.BooleanVar,
+                hint: str = "", command=None) -> tk.Frame:
+        """一行「说明 + 滑动开关」；整行可点，不再用系统复选框。"""
+        row = tk.Frame(parent, bg=theme.BG)
+        row.pack(fill="x", pady=(theme.px(9), 0))
+        info = tk.Frame(row, bg=theme.BG)
+        info.pack(side="left", fill="x", expand=True)
+        label = tk.Label(info, text=text, bg=theme.BG, fg=theme.FG,
+                         font=theme.FONT_SMALL, anchor="w", justify="left")
+        label.pack(fill="x")
+        clickable = [row, info, label]
+        if hint:
+            tip = tk.Label(info, text=hint, bg=theme.BG, fg=theme.FG_FAINT,
+                           font=theme.FONT_TINY, anchor="w", justify="left",
+                           wraplength=theme.px(430))
+            tip.pack(fill="x")
+            clickable.append(tip)
+        switch = ToggleSwitch(row, var, command)
+        switch.pack(side="right", padx=(theme.px(12), 0), anchor="n")
+        for widget in clickable:
+            widget.bind("<Button-1>", lambda _e: switch.invoke(), add="+")
+        return row
+
     def _check(self, parent, text: str, var: tk.BooleanVar,
-               command=None) -> tk.Checkbutton:
-        return tk.Checkbutton(parent, text=text, variable=var, bg=theme.BG,
-                              fg=theme.FG_DIM, selectcolor=theme.CARD,
-                              activebackground=theme.BG, activeforeground=theme.FG,
-                              font=theme.FONT_SMALL, bd=0, highlightthickness=0,
-                              anchor="w", cursor="hand2", command=command)
+               command=None) -> tk.Frame:
+        """兼容旧调用：复选框统一换成滑动开关。"""
+        return self._toggle(parent, text, var, command=command)
 
     def _apply(self) -> None:
         cfg = self.cfg
         cfg.theme_preset = self.var_preset.get()
+        cfg.theme_dark = bool(getattr(self, "var_dark", None)
+                              and self.var_dark.get())
+        cfg.auto_update_ytdlp = bool(getattr(self, "var_auto_ytdlp", None)
+                                     and self.var_auto_ytdlp.get())
+        cfg.auto_update_app = bool(getattr(self, "var_auto_app", None)
+                                   and self.var_auto_app.get())
+        cfg.check_updates = cfg.auto_update_app
         cfg.accent = self.var_accent.get()
         cfg.radius_button = max(0, min(28, int(self.var_radius_button.get())))
         cfg.radius_window = max(0, min(30, int(self.var_radius_window.get())))
@@ -1249,7 +1605,14 @@ class SettingsDialog(tk.Toplevel):
             self.grab_release()
         except tk.TclError:
             pass
-        self.destroy()
+        motion.close_window(self, self._finish_apply, dy=theme.px(6))
+
+    def _finish_apply(self) -> None:
+        cfg = self.cfg
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
         self.on_apply(cfg)
 
     def _activate_window(self) -> None:
@@ -1259,20 +1622,6 @@ class SettingsDialog(tk.Toplevel):
             self.deiconify()
             self.lift()
             self.focus_force()
-            self.after(40, self._grab_modal)
-        except tk.TclError:
-            pass
-
-    def _grab_modal(self, attempt: int = 0) -> None:
-        if self._closing:
-            return
-        try:
-            if not self.winfo_viewable():
-                # 窗口尚未真正显示时绝不 grab，否则主界面会被锁住
-                if attempt < 12:
-                    self.after(50, lambda: self._grab_modal(attempt + 1))
-                return
-            self.grab_set()
         except tk.TclError:
             pass
 
@@ -1287,10 +1636,17 @@ class SettingsDialog(tk.Toplevel):
         try:
             if self._preview_job is not None:
                 self.after_cancel(self._preview_job)
+                self._preview_job = None
         except tk.TclError:
             pass
         self._cancel_ytdlp_job()
-        self.destroy()
+        motion.close_window(self, self._finish_close, dy=theme.px(6))
+
+    def _finish_close(self) -> None:
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
     def _cancel_ytdlp_job(self) -> None:
         self._ytdlp_cancel.set()

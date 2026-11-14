@@ -145,7 +145,7 @@ def window_slice(width: int, height: int, offset: tuple[int, int] = (0, 0),
     """
     if not _PIL:
         return None
-    spec = spec or theme.wallpaper_spec()
+    spec = spec or theme.WALLPAPER
     win_w, win_h = (win if win and win[0] > 8 else
                     (max(width, 1), max(height, 1)))
     wall = wallpaper_image(win_w, win_h, spec)

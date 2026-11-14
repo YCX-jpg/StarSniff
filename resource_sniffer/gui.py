@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox
 from typing import Optional
 
 from . import config as cfgmod
-from . import frameless, glass, smartproxy, theme, updater, useragents
+from . import frameless, glass, motion, smartproxy, theme, updater, useragents
 from . import __version__ as APP_VERSION
 from .config import Config
 from .downloader import DownloadManager, DownloadTask
@@ -58,7 +58,13 @@ class MainWindow(tk.Tk):
         self._normal_geometry = ""
         self._drag_offset = None
         self._closing = False
+        self._intro_done = False
         self.overrideredirect(True)
+        # 界面搭好之前先透明，最后统一淡入，避免整窗"啪"地弹出来
+        try:
+            self.attributes("-alpha", 0.0)
+        except tk.TclError:
+            pass
 
         # 配置目录：默认放在程序目录；测试/绿色版可用 RS_CONFIG_DIR 指定别处，
         # 避免把运行状态写进用户目录。
@@ -70,7 +76,8 @@ class MainWindow(tk.Tk):
         # 先应用视觉预设，再按 DPI 放大度量并构建界面
         theme.apply_style(self.cfg.theme_preset, self.cfg.accent,
                           self.cfg.radius_button, self.cfg.radius_window,
-                          self.cfg.animations, self.cfg.anim_fps)
+                          self.cfg.animations, self.cfg.anim_fps,
+                          dark=bool(getattr(self.cfg, "theme_dark", False)))
         self._scale = theme.apply_scale(self)
         self._apply_geometry_scale()
 
@@ -120,7 +127,7 @@ class MainWindow(tk.Tk):
             self, theme.px(860), theme.px(560),
             is_maximized=lambda: self._maximized)
         self._apply_window_radius()
-        self.after(300, self._apply_window_glass)
+        self.after(40, self._apply_window_glass)
         self.bind("<Alt-F4>", lambda _e: self._on_close())
         self.bind("<Control-a>", self._on_select_all_key)
         self.bind("<Control-A>", self._on_select_all_key)
@@ -131,7 +138,36 @@ class MainWindow(tk.Tk):
         # overrideredirect 窗口默认不在任务栏：改窗口样式后再显示
         self.after(50, lambda: frameless.apply_taskbar_style(self))
         self._update_job = self.after(1600, self._auto_check_updates)
+        # 打开动画：窗口淡入 + 从下方滑入；从最小化还原时也重放一次
+        self._mapped = False
+        self.bind("<Map>", self._on_window_map, add="+")
+        self.after(70, self._play_open_animation)
         self._log("就绪。输入网址开始嗅探。")
+
+    # ------------------------------------------------------------ 窗口动画
+    def _window_alpha(self) -> float:
+        """亚克力深色版本来就带一点透明，其余主题完全不透明。"""
+        return 0.975 if (theme.ACRYLIC and theme.DARK_UI) else 1.0
+
+    def _play_open_animation(self) -> None:
+        self._mapped = True
+        motion.open_window(self, dy=theme.px(14), duration=180,
+                           target=self._window_alpha())
+        self._intro_done = True
+
+    def _on_window_map(self, event=None) -> None:
+        """从最小化还原时再做一次淡入（首次显示由 _play_open_animation 负责）。"""
+        if event is not None and event.widget is not self:
+            return
+        if not getattr(self, "_intro_done", False) or getattr(self, "_closing", False):
+            return
+        try:
+            if self.state() != "normal":
+                return
+        except tk.TclError:
+            return
+        motion.open_window(self, dy=0, duration=140,
+                           target=self._window_alpha())
 
     # ================================================================== UI
     def _apply_geometry_scale(self) -> None:
@@ -262,6 +298,29 @@ class MainWindow(tk.Tk):
                     self.after(delay, job)
                 except tk.TclError:
                     pass
+        # 启动后的自动更新：软件检查 + yt-dlp 静默更新（都可关）
+        try:
+            if (getattr(self.cfg, "auto_update_app", True)
+                    and getattr(self.cfg, "check_updates", True)):
+                self.after(2500, lambda: self._start_update_check(silent=True))
+            if getattr(self.cfg, "auto_update_ytdlp", True):
+                self.after(4000, self._auto_update_ytdlp)
+        except tk.TclError:
+            pass
+
+    def _auto_update_ytdlp(self) -> None:
+        """后台静默更新 yt-dlp；失败不打扰用户。"""
+        if not ytdlp.available():
+            return
+
+        def work() -> None:
+            try:
+                ytdlp.download_latest()
+                ytdlp.reset()
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=work, daemon=True, name="ytdlp-auto").start()
 
     def _redraw_glass_list(self) -> None:
         view = getattr(self, "list_view", None)
@@ -608,7 +667,8 @@ class MainWindow(tk.Tk):
         frameless.do_drag(self, event)
 
     def _minimize(self) -> None:
-        frameless.minimize(self)
+        # 先轻轻淡出再交给系统，还原时由 <Map> 负责淡入
+        motion.minimize_window(self, lambda: frameless.minimize(self))
 
     def _toggle_maximize(self) -> None:
         maximized = frameless.toggle_maximize(self)
@@ -684,15 +744,38 @@ class MainWindow(tk.Tk):
         opts = tk.Frame(parent, bg=theme.BG)
         self.var_dynamic = tk.BooleanVar(value=self.cfg.dynamic)
         self.var_deep = tk.BooleanVar(value=self.cfg.deep)
-        for text, var in (("深度", self.var_deep), ("动态", self.var_dynamic)):
+        self.var_ytdlp = tk.BooleanVar(value=bool(self.cfg.use_ytdlp))
+        for text, var, note in (
+                ("深度", self.var_deep, "深入解析子页面"),
+                ("动态", self.var_dynamic, "用内置浏览器跑动态页面"),
+                ("yt-dlp", self.var_ytdlp, "优先用 yt-dlp 拉剧集清单")):
             cb = tk.Checkbutton(opts, text=text, variable=var, bg=theme.BG,
                                 fg=theme.FG_DIM, selectcolor=theme.CARD,
                                 activebackground=theme.BG,
                                 activeforeground=theme.FG,
                                 font=theme.FONT_SMALL,
-                                bd=0, highlightthickness=0, cursor="hand2")
+                                bd=0, highlightthickness=0, cursor="hand2",
+                                command=self._on_toggle_change)
             cb.pack(side="left", padx=2)
+            self._bind_tip(cb, note)
         return opts
+
+    def _bind_tip(self, widget, text: str) -> None:
+        """极简悬浮提示：鼠标停上去在状态栏显示说明，不额外画窗口。"""
+        widget.bind("<Enter>", lambda _e: self._log(text))
+        widget.bind("<Leave>", lambda _e: self._log(""))
+
+    def _on_toggle_change(self) -> None:
+        """工具栏上的复选框直接写回配置，下次嗅探立即生效。"""
+        if hasattr(self, "var_dynamic"):
+            self.cfg.dynamic = bool(self.var_dynamic.get())
+        if hasattr(self, "var_deep"):
+            self.cfg.deep = bool(self.var_deep.get())
+        if hasattr(self, "var_ytdlp"):
+            self.cfg.use_ytdlp = bool(self.var_ytdlp.get())
+            if self.cfg.use_ytdlp and not ytdlp.available():
+                self._log("yt-dlp 还没安装，可在「设置」里一键下载")
+        cfgmod.save(self.cfg, self.base_dir)
 
     def _build_inline_search(self, parent) -> None:
         pad = theme.px(int(self._layout.get("search_pad", 18)))
@@ -2158,9 +2241,18 @@ class MainWindow(tk.Tk):
 
     def _apply_preferences(self, _cfg: Config) -> None:
         cfgmod.save(self.cfg, self.base_dir)
+        previous = theme.ACTIVE_PRESET
         theme.apply_style(self.cfg.theme_preset, self.cfg.accent,
                           self.cfg.radius_button, self.cfg.radius_window,
-                          self.cfg.animations, self.cfg.anim_fps)
+                          self.cfg.animations, self.cfg.anim_fps,
+                          dark=bool(getattr(self.cfg, "theme_dark", False)))
+        # 性能主题是另一个原生窗口，切过去/切回来都必须重启才生效
+        if (previous == "perf") != (self.cfg.theme_preset == "perf"):
+            if messagebox.askyesno(
+                    "切换界面",
+                    "性能主题使用原生系统窗口，需要重启程序才能生效。\n现在重启吗？"):
+                self._relaunch()
+                return
         theme.apply_scale(self)
         mediainfo.THUMBNAIL_SIDE = theme.THUMB_SIZE
         self.download_dir = (self.cfg.download_dir
@@ -2174,6 +2266,24 @@ class MainWindow(tk.Tk):
             1, min(8, int(getattr(self.cfg, "download_segments", 4) or 1)))
         self._rebuild_ui()
         self._log("设置已应用")
+
+    def _relaunch(self) -> None:
+        """保存配置后用同样的方式重启自己（切换性能界面时用）。"""
+        import subprocess
+
+        try:
+            cfgmod.save(self.cfg, self.base_dir)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable])
+            else:
+                subprocess.Popen([sys.executable, os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "app.py")])
+        finally:
+            self.destroy()
 
     def _rebuild_ui(self) -> None:
         """换肤：保留资源/筛选/输入，销毁并重建全部子控件。"""
@@ -2233,25 +2343,22 @@ class MainWindow(tk.Tk):
             pass
 
     def _apply_window_glass(self) -> None:
-        """亚克力主题：开启 Windows 真模糊 + 半透明窗口。
+        """亚克力主题（深色）：开启 Windows 真模糊 + 轻微半透明。
 
-        液态玻璃保持不透明窗口，只在控件内部绘制反射/折射，避免桌面
-        内容干扰“光从左上角来”的固定光照模型。
+        浅色版一律保持不透明窗口：亚克力的深色 tint 会把浅色界面压暗，
+        桌面内容透上来还会让「浅色」看起来只有一半是浅的。
+        液态玻璃同理，只在控件内部绘制反射/折射。
         """
         if self._closing:
             return
         try:
-            if theme.ACRYLIC:
-                self.attributes("-alpha", 0.975)
+            if theme.ACRYLIC and theme.DARK_UI:
                 frameless.enable_acrylic(self, True, 0xCC20150b)
-            elif theme.ACTIVE_PRESET == "glass":
-                # 液态玻璃是浅色的，保持不透明才能保证深色文字清楚；
-                # 玻璃的透光和折射全部在控件内部自绘。
-                self.attributes("-alpha", 1.0)
-                frameless.enable_acrylic(self, False)
             else:
-                self.attributes("-alpha", 1.0)
                 frameless.enable_acrylic(self, False)
+            # 打开动画还没跑完时不要改 alpha，否则淡入会被打断
+            if self._intro_done:
+                self.attributes("-alpha", self._window_alpha())
         except tk.TclError:
             pass
 
@@ -2302,6 +2409,9 @@ class MainWindow(tk.Tk):
                     setattr(self, attr, None)
             except tk.TclError:
                 pass
+        motion.close_window(self, self._finish_close, dy=theme.px(8))
+
+    def _finish_close(self) -> None:
         try:
             self.attributes("-alpha", 1.0)
             frameless.enable_acrylic(self, False)

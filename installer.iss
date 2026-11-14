@@ -6,11 +6,11 @@
 ;     用户仍可在这个页面改到别的位置，等于「更新 or 换位置」；
 ;   * 卸载信息写进「应用和功能」，带图标和版本号。
 ;
-; 编译：ISCC.exe installer.iss
+; 编译：ISCC.exe /DMyAppVersion=3.1.1-rc2 /DMyOutputDir=dist installer.iss
 
 #define MyAppName "StarSniff 星嗅"
 #ifndef MyAppVersion
-  #define MyAppVersion "2.1.7"
+  #define MyAppVersion "3.1.1"
 #endif
 #ifndef MyOutputDir
   #define MyOutputDir "dist"

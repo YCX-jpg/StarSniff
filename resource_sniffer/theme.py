@@ -101,6 +101,36 @@ PRESETS = {
             "image": "#67e8f9", "audio": "#c4b5fd",
             "video": "#f9a8d4", "stream": "#fcd34d", "other": "#94a3b8",
         },
+        # 浅色版本：跟官网同一套底（奶油白→雾蓝→淡紫渐变 + 柔和光斑），
+        # 底色 #eef2fb 也和官网 body 一致，不会白得刺眼。
+        "light": {
+            "colors": {
+                "BG": "#eef2fb", "PANEL": "#e9eef9", "PANEL_ALT": "#f4f7fd",
+                "CARD": "#fbfcff", "CARD_HOVER": "#e6eeff", "BORDER": "#d3daeb",
+                "BORDER_LIGHT": "#ffffff", "FG": "#16202e", "FG_DIM": "#3f4e63",
+                "FG_FAINT": "#5a6a80", "SUCCESS": "#0f7b4f",
+                "WARN": "#8a5c00", "ERROR": "#b32b42",
+                "SELECTED_ROW": "#d9e4ff", "ROW_HOVER": "#eaf0fc",
+                "SEGMENT_BG": "#e2e8f5", "SEGMENT_ACTIVE": "#ffffff",
+                "CHIP_BG": "#e9eef9", "THUMB_BG": "#e4eaf5",
+            },
+            "title_bg": "#eef3fb", "title_fg": "#16202e",
+            "title_sub": "#55657d",
+            "kind_colors": {
+                "image": "#0369a1", "audio": "#6d28d9",
+                "video": "#be185d", "stream": "#a16207", "other": "#55657a",
+            },
+            "wallpaper": {
+                "top": "#fff1e6", "base": "#e9f0ff", "bottom": "#dfe7ff",
+                "linear": True, "range": (0.22, 0.88),
+                "blobs": (
+                    (0.06, 0.02, 0.72, "#ffc2d6", 0.62),
+                    (0.94, 0.10, 0.66, "#b9d6ff", 0.62),
+                    (0.34, 0.96, 0.74, "#cdbcff", 0.54),
+                    (0.92, 0.84, 0.60, "#ffd0a2", 0.52),
+                ),
+            },
+        },
         "button_radius": 14, "window_radius": 18,
     },
     "glass": {
@@ -147,14 +177,62 @@ PRESETS = {
         },
         "button_radius": 16, "window_radius": 12,
     },
+    "perf": {
+        "label": "性能",
+        "description": "系统原生控件，不绘制阴影与模糊，最省显卡",
+        "colors": {
+            "BG": "#f3f3f3", "PANEL": "#ffffff", "PANEL_ALT": "#fafafa",
+            "CARD": "#ffffff", "CARD_HOVER": "#f0f6ff", "BORDER": "#d0d0d0",
+            "BORDER_LIGHT": "#e6e6e6", "FG": "#1a1a1a", "FG_DIM": "#484848",
+            "FG_FAINT": "#6a6a6a", "SUCCESS": "#107c10", "WARN": "#9d5d00",
+            "ERROR": "#c42b1c", "SELECTED_ROW": "#cce4ff", "ROW_HOVER": "#eef4fb",
+            "SEGMENT_BG": "#eaeaea", "SEGMENT_ACTIVE": "#ffffff",
+            "CHIP_BG": "#f0f0f0", "THUMB_BG": "#e8e8e8",
+        },
+        "accent": "#0067c0",
+        "title_bg": "#f3f3f3", "title_fg": "#1a1a1a",
+        "title_sub": "#6a6a6a",
+        "font": "Microsoft YaHei UI", "base": 10, "h1": 15,
+        "kind_colors": {
+            "image": "#0067c0", "audio": "#7a3fc0",
+            "video": "#b02a6a", "stream": "#8a6a00", "other": "#5a5a5a",
+        },
+        # 深色版本：Win11 中性灰，标题栏一起变深
+        "dark": {
+            "colors": {
+                "BG": "#202020", "PANEL": "#2b2b2b", "PANEL_ALT": "#272727",
+                "CARD": "#333333", "CARD_HOVER": "#3e3e3e", "BORDER": "#454545",
+                "BORDER_LIGHT": "#5a5a5a", "FG": "#f3f3f3", "FG_DIM": "#bdbdbd",
+                "FG_FAINT": "#8f8f8f", "SUCCESS": "#6ccb5f",
+                "WARN": "#f0c674", "ERROR": "#ff6b6b",
+                "SELECTED_ROW": "#2f4a68", "ROW_HOVER": "#353535",
+                "SEGMENT_BG": "#2c2c2c", "SEGMENT_ACTIVE": "#3c3c3c",
+                "CHIP_BG": "#343434", "THUMB_BG": "#1a1a1a",
+            },
+            "title_bg": "#1c1c1c", "title_fg": "#f3f3f3",
+            "title_sub": "#9a9a9a",
+            "kind_colors": {
+                "image": "#4cc2ff", "audio": "#b48bff",
+                "video": "#ff7aa8", "stream": "#f0c674", "other": "#a0a0a0",
+            },
+            "wallpaper": {
+                "top": "#262626", "base": "#1e1e1e", "bottom": "#181818",
+                "blobs": (
+                    (0.14, 0.12, 0.58, "#2b3a4a", 0.45),
+                    (0.84, 0.30, 0.54, "#33304a", 0.40),
+                ),
+            },
+        },
+        "button_radius": 6, "window_radius": 0,
+    },
     "retro": {
         "label": "复古 2000",
         "description": "Windows 2000 灰阶与蓝色标题栏",
         "colors": {
             "BG": "#d4d0c8", "PANEL": "#d4d0c8", "PANEL_ALT": "#d9d6cf",
             "CARD": "#ffffff", "CARD_HOVER": "#e9e6de", "BORDER": "#808080",
-            "BORDER_LIGHT": "#404040", "FG": "#000000", "FG_DIM": "#333333",
-            "FG_FAINT": "#666666", "SUCCESS": "#006600", "WARN": "#8a5a00",
+            "BORDER_LIGHT": "#404040", "FG": "#000000", "FG_DIM": "#2b2b2b",
+            "FG_FAINT": "#4f4f4f", "SUCCESS": "#006600", "WARN": "#8a5a00",
             "ERROR": "#bb0000", "SELECTED_ROW": "#c1d2ee", "ROW_HOVER": "#e8e5dc",
             "SEGMENT_BG": "#bdb9b2", "SEGMENT_ACTIVE": "#ffffff",
             "CHIP_BG": "#ece9d8", "THUMB_BG": "#ffffff",
@@ -166,6 +244,32 @@ PRESETS = {
         "kind_colors": {
             "image": "#006080", "audio": "#6a0dad",
             "video": "#a00040", "stream": "#806000", "other": "#404040",
+        },
+        # 深色版本：Win2000 灰阶压暗，标题栏换成深海军蓝
+        "dark": {
+            "colors": {
+                "BG": "#242424", "PANEL": "#2c2c2c", "PANEL_ALT": "#313131",
+                "CARD": "#3a3a3a", "CARD_HOVER": "#464646", "BORDER": "#565656",
+                "BORDER_LIGHT": "#707070", "FG": "#eae6dc", "FG_DIM": "#bbb7ae",
+                "FG_FAINT": "#8c887f", "SUCCESS": "#57c85a",
+                "WARN": "#d7a441", "ERROR": "#e26060",
+                "SELECTED_ROW": "#1f3a5f", "ROW_HOVER": "#343432",
+                "SEGMENT_BG": "#2a2a2a", "SEGMENT_ACTIVE": "#3c3c3c",
+                "CHIP_BG": "#333333", "THUMB_BG": "#1b1b1b",
+            },
+            "title_bg": "#143a6b", "title_fg": "#ffffff",
+            "title_sub": "#b9c6dd",
+            "kind_colors": {
+                "image": "#4bb8d8", "audio": "#b98cf5",
+                "video": "#f06292", "stream": "#d4a72c", "other": "#a8a8a8",
+            },
+            "wallpaper": {
+                "top": "#22303c", "base": "#1a232b", "bottom": "#141a20",
+                "blobs": (
+                    (0.18, 0.08, 0.60, "#2b4a55", 0.42),
+                    (0.82, 0.80, 0.68, "#16333a", 0.48),
+                ),
+            },
         },
         "button_radius": 0, "window_radius": 0,
     },
@@ -217,6 +321,16 @@ LAYOUTS = {
         "content_pad": 16, "card_gap": 0, "motion": "glow",
         "traffic_lights": False,
     },
+    "perf": {
+        "shell": "standard", "header": "bar", "header_height": 46,
+        "title_align": "left", "show_subtitle": True, "brand": "full",
+        "search": "inline", "search_height": 34, "search_pad": 12,
+        "start_width": 88, "start_height": 34, "start_style": "rounded",
+        "filters": "segmented", "filter_align": "left", "filter_in_sidebar": False,
+        "footer": "bar", "list": "rows", "row_height": 56, "thumb": 44,
+        "content_pad": 12, "card_gap": 0, "motion": "none",
+        "traffic_lights": False,
+    },
     "retro": {
         "shell": "standard", "header": "menu", "header_height": 30,
         "title_align": "left", "show_subtitle": False, "brand": "full",
@@ -228,6 +342,14 @@ LAYOUTS = {
         "traffic_lights": False,
     },
 }
+
+
+# 3.1.1 起只保留三套主题：亚克力 / 复古 / 性能
+_ALLOWED = ("acrylic", "retro", "perf")
+PRESETS = {k: v for k, v in PRESETS.items() if k in _ALLOWED}
+PRESET_KEYS = tuple(PRESETS)
+PRESET_NAMES = {k: v['label'] for k, v in PRESETS.items()}
+LAYOUTS = {k: v for k, v in LAYOUTS.items() if k in _ALLOWED}
 
 for _key, _preset in PRESETS.items():
     _preset["layout"] = LAYOUTS[_key]
@@ -265,6 +387,14 @@ WALLPAPERS = {
             (0.52, 0.94, 0.62, "#0f4a55", 0.34),
         ),
     },
+    # 性能主题：中性浅灰，几乎看不出光斑，免得抢注意力
+    "perf": {
+        "top": "#f7f7f7", "base": "#f1f1f1", "bottom": "#e9e9e9",
+        "blobs": (
+            (0.14, 0.10, 0.56, "#e6eef7", 0.35),
+            (0.86, 0.28, 0.52, "#ecebea", 0.28),
+        ),
+    },
     # 浅色液态玻璃：奶油白 → 天空蓝 → 淡紫，彩色光斑像 iOS 壁纸
     "glass": {
         "top": "#ffede0", "base": "#e7f0ff", "bottom": "#cfdcff",
@@ -294,15 +424,15 @@ WALLPAPERS = {
     },
 }
 
-ACTIVE_PRESET = "default"
+ACTIVE_PRESET = "acrylic"
 CLASSIC = False
 GLASS = False
 ACRYLIC = False
 NEON = False
 DARK_UI = True
-LAYOUT = LAYOUTS["default"]
+LAYOUT = LAYOUTS["acrylic"]
 MOTION = "fade"
-WALLPAPER = dict(WALLPAPERS["default"])
+WALLPAPER = dict(WALLPAPERS["acrylic"])
 RADIUS_BUTTON = 10
 RADIUS_WINDOW = 0
 ANIMATIONS = True
@@ -390,7 +520,7 @@ def luma(color: str) -> float:
 def wallpaper_spec(preset: str = "") -> dict:
     """返回某套主题的壁纸定义（不修改当前全局样式）。"""
     key = preset or ACTIVE_PRESET
-    return WALLPAPERS.get(key) or WALLPAPERS["default"]
+    return WALLPAPERS.get(key) or WALLPAPERS["acrylic"]
 
 
 def wallpaper_color_at(spec: dict, u: float, v: float,
@@ -403,11 +533,18 @@ def wallpaper_color_at(spec: dict, u: float, v: float,
     spec = spec or WALLPAPER
     u = max(0.0, min(1.0, u))
     v = max(0.0, min(1.0, v))
+    # 有的壁纸只想在窗口中间那一段展示完整渐变（range=(起点, 终点)）
+    span = spec.get("range")
+    if span:
+        low, high = float(span[0]), float(span[1])
+        v = max(0.0, min(1.0, (v - low) / max(0.05, high - low)))
+    # 浅色壁纸（跟官网同款）用线性渐变，smoothstep 会让中段突然变色，出现横带
+    ramp = (lambda t: t) if spec.get("linear") else _smoothstep
     if v <= 0.5:
-        color = blend(spec["top"], spec["base"], _smoothstep(v * 2.0))
+        # 顶部 → 中间底色：weight 是「top 占多少」，v=0 时整块 top
+        color = blend(spec["top"], spec["base"], 1.0 - ramp(v * 2.0))
     else:
-        color = blend(spec["bottom"], spec["base"],
-                      _smoothstep((v - 0.5) * 2.0))
+        color = blend(spec["bottom"], spec["base"], ramp((v - 0.5) * 2.0))
     for buoy, buv, radius, blob_color, strength in spec.get("blobs", ()):
         if not blobs:
             break
@@ -435,9 +572,14 @@ def window_radius() -> int:
     return px(RADIUS_WINDOW)
 
 
-def palette_for(preset: str, accent: str = "") -> dict:
-    """返回某预设的完整配色（不修改当前全局样式），用于预览。"""
-    base = PRESETS.get(preset) or PRESETS["default"]
+def palette_for(preset: str, accent: str = "",
+                dark: bool | None = None) -> dict:
+    """返回某预设的完整配色（不修改当前全局样式），用于预览。
+
+    ``dark`` 为 None 时返回预设原样；否则返回该明暗变体（浅色版标题栏
+    也会一起变，不会出现“只有一半是浅色”）。
+    """
+    base = PRESETS.get(preset) or PRESETS["acrylic"]
     data = dict(base)
     data["colors"] = dict(base["colors"])
     chosen = (accent or base.get("accent") or ACCENT).strip()
@@ -450,14 +592,64 @@ def palette_for(preset: str, accent: str = "") -> dict:
     data["accent_hover"] = blend(chosen, "#ffffff", 0.18)
     data["accent_dim"] = blend(chosen, "#000000", 0.30)
     data["wallpaper"] = wallpaper_spec(preset)
+    if dark is not None:
+        data = variant_palette(data, dark)
     return data
 
 
-def apply_style(preset: str = "default", accent: str = "",
+def _invert_hex(color: str) -> str:
+    """把颜色按通道取反（用于生成同主题的深色/浅色变体）。"""
+    value = (color or "").lstrip("#")
+    if len(value) != 6:
+        return color
+    try:
+        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return color
+    return "#%02x%02x%02x" % (255 - r, 255 - g, 255 - b)
+
+
+def variant_colors(colors: dict, dark: bool) -> dict:
+    """返回目标明暗的配色：底色已经是目标明暗就原样返回，否则整体取反。"""
+    base_dark = luma(colors.get("BG", "#ffffff")) < 0.45
+    if bool(dark) == base_dark:
+        return colors
+    return {key: _invert_hex(val) for key, val in colors.items()}
+
+
+_VARIANT_KEYS = ("title_bg", "title_fg", "title_sub", "wallpaper", "kind_colors")
+
+
+def variant_palette(data: dict, dark: bool) -> dict:
+    """把预设换成目标明暗：优先用手写的浅色/深色变体，没有才整体取反。
+
+    手写变体同时覆盖标题栏、壁纸和类型色，所以浅色主题不会只浅一半。
+    """
+    base_dark = luma(data["colors"].get("BG", "#ffffff")) < 0.45
+    if bool(dark) == base_dark:
+        return data
+    out = dict(data)
+    variant = data.get("dark" if dark else "light")
+    if variant:
+        out["colors"] = dict(variant.get("colors") or data["colors"])
+        for key in _VARIANT_KEYS:
+            if key in variant:
+                out[key] = variant[key]
+        return out
+    # 没有手写变体：整组颜色取反，标题栏一起翻，避免只剩半套浅色
+    out["colors"] = variant_colors(data["colors"], dark)
+    for key in ("title_bg", "title_fg", "title_sub"):
+        value = data.get(key)
+        if value:
+            out[key] = _invert_hex(value)
+    return out
+
+
+def apply_style(preset: str = "acrylic", accent: str = "",
                 radius_button: int | None = None,
                 radius_window: int | None = None,
                 animations: bool = True,
-                anim_fps: int = 60) -> None:
+                anim_fps: int = 60, dark: bool = False) -> None:
     """切换视觉预设（写进模块级常量，调用后需要重建界面）。"""
     global ACTIVE_PRESET, CLASSIC, GLASS, ACRYLIC, NEON, ANIMATIONS, ANIM_FPS
     global DARK_UI, WALLPAPER
@@ -471,17 +663,18 @@ def apply_style(preset: str = "default", accent: str = "",
     global FONT_BUTTON, FONT_MONO
     global RADIUS_BUTTON, RADIUS_WINDOW
 
-    key = preset if preset in PRESETS else "default"
-    data = palette_for(key, accent)
+    key = preset if preset in PRESETS else "acrylic"
+    # 每套主题都有深/浅两种：优先用手写变体，标题栏、壁纸、类型色一起换
+    data = palette_for(key, accent, dark=bool(dark))
     colors = data["colors"]
     ACTIVE_PRESET = key
     CLASSIC = key == "retro"
     GLASS = key in ("glass", "neon")
     NEON = key == "neon"
     ACRYLIC = key == "acrylic"
-    WALLPAPER = dict(wallpaper_spec(key))
+    WALLPAPER = dict(data.get("wallpaper") or wallpaper_spec(key))
     DARK_UI = luma(colors["BG"]) < 0.45
-    LAYOUT = dict(LAYOUTS.get(key) or LAYOUTS["default"])
+    LAYOUT = dict(LAYOUTS.get(key) or LAYOUTS["acrylic"])
     MOTION = str(LAYOUT.get("motion") or "fade")
     BASE_ROW_HEIGHT = int(LAYOUT.get("row_height") or 80)
     BASE_THUMB_SIZE = int(LAYOUT.get("thumb") or 68)
@@ -531,7 +724,8 @@ def apply_style(preset: str = "default", accent: str = "",
                                      else data.get("button_radius", 10))))
     RADIUS_WINDOW = max(0, min(30, int(radius_window if radius_window is not None
                                      else data.get("window_radius", 0))))
-    ANIMATIONS = bool(animations)
+    # 性能主题（motion=none）强制关闭动画：不吃 GPU，也不要有“科技感”的光效
+    ANIMATIONS = bool(animations) and MOTION != "none"
     try:
         ANIM_FPS = max(5, min(120, int(anim_fps)))
     except (TypeError, ValueError):

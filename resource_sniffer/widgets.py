@@ -35,7 +35,7 @@ def paint_wallpaper(canvas: tk.Canvas, width: int, height: int,
     这样标题栏和内容区各自画出来的壁纸能接上，看起来是同一张。
     ``phase`` 不为空时让光斑非常缓慢地漂移（给标题栏做呼吸感）。
     """
-    spec = spec or theme.wallpaper_spec()
+    spec = spec or theme.WALLPAPER
     win_w, win_h = (win if win and win[0] > 8 and win[1] > 8
                     else (max(width, 1), max(height, 1)))
     ox, oy = offset
@@ -77,7 +77,7 @@ def paint_wallpaper(canvas: tk.Canvas, width: int, height: int,
 def wallpaper_base(spec: dict | None = None, u: float = 0.5, v: float = 0.3,
                    aspect: float = 1.7, white: float = 0.62) -> str:
     """玻璃卡片的底色：壁纸颜色混白，像磨砂玻璃透出后面的壁纸。"""
-    spec = spec or theme.wallpaper_spec()
+    spec = spec or theme.WALLPAPER
     wall = theme.wallpaper_color_at(spec, u, v, aspect)
     return theme.blend("#ffffff", wall, white)
 
@@ -612,6 +612,16 @@ class ResourceList(tk.Frame):
         self._change_pending = False
         self._shine_phase = 0.0
         self._shine_job = None
+        # 新行飞入：id(item) -> 开始时间戳（错峰），跑完就清空
+        self._fly: dict[int, float] = {}
+        self._fly_job = None
+        # 平滑滚动
+        self._scroll_job = None
+        self._scroll_t0 = 0.0
+        self._scroll_from = 0.0
+        self._scroll_goal = 0.0
+        self._scroll_total = 1.0
+        self._wheel_accum = 0.0
         self.empty_hint = "还没有嗅探到资源\n在上方输入网址后点击「开始」"
 
         self.f_title = tkfont.Font(family=theme.FONT_FAMILY, size=10)
@@ -642,29 +652,57 @@ class ResourceList(tk.Frame):
         self.canvas.bind("<space>", lambda _e: self.toggle_selected())
         self.bind("<Control-a>", lambda _e: self.select_all())
 
-        if (theme.ACTIVE_PRESET in ("glass", "acrylic")
-                and theme.ANIMATIONS):
-            self.bind("<Destroy>", self._on_destroy_shine, add="+")
-            try:
-                self._shine_job = self.after(theme.frame_delay(),
-                                             self._shine_tick)
-            except tk.TclError:
-                self._shine_job = None
+        # 列表卡片的静态高光已经随重绘画好；这里不再跑常驻动画定时器，
+        # 只给「新行飞入」留一段短动画，省掉常驻 60FPS 的重绘开销。
+        self.bind("<Destroy>", self._on_destroy_shine, add="+")
 
-    def _shine_tick(self) -> None:
-        """列表玻璃的动画：只重画卡片上的扫光，帧率跟随设置（5–120 FPS）。"""
-        self._shine_job = None
+    # ------------------------------------------------------------ 飞入动画
+    FLY_DIST = 22          # 起点在目标位置下方多少像素
+    FLY_TIME = 0.26        # 单行动画时长（秒）
+    FLY_STAGGER = 0.032    # 行与行之间错开多久
+
+    def _fly_offset(self, item) -> float:
+        """还没轮到 / 正在飞入的行返回向下偏移，落位后返回 0。"""
+        start = self._fly.get(id(item))
+        if start is None:
+            return 0.0
+        elapsed = time.monotonic() - start
+        if elapsed >= self.FLY_TIME:
+            self._fly.pop(id(item), None)
+            return 0.0
+        if elapsed <= 0:
+            return theme.px(self.FLY_DIST)
+        eased = 1.0 - (1.0 - elapsed / self.FLY_TIME) ** 3
+        return theme.px(self.FLY_DIST) * (1.0 - eased)
+
+    def _start_fly(self, item) -> None:
+        if not theme.ANIMATIONS:
+            return
+        delay = min(0.45, len(self._fly) * self.FLY_STAGGER)
+        self._fly[id(item)] = time.monotonic() + delay
+        if self._fly_job is None:
+            try:
+                self._fly_job = self.after(16, self._fly_tick)
+            except tk.TclError:
+                self._fly_job = None
+
+    def _fly_tick(self) -> None:
+        self._fly_job = None
+        if not self._fly:
+            return
+        now = time.monotonic()
+        for key, start in list(self._fly.items()):
+            if now - start >= self.FLY_TIME:
+                self._fly.pop(key, None)
         try:
-            if not self.winfo_exists():
-                return
-            delay = theme.frame_delay()
-            self._shine_phase = (self._shine_phase + 0.45 * delay / 1000.0) % 1.0
-            if (self._card_boxes and self.winfo_ismapped()
-                    and not glass.busy()):
-                self._draw_sweeps()
-            self._shine_job = self.after(delay, self._shine_tick)
+            self.redraw()
         except tk.TclError:
-            self._shine_job = None
+            return
+        if self._fly:
+            try:
+                self._fly_job = self.after(16, self._fly_tick)
+            except tk.TclError:
+                self._fly_job = None
 
     def _draw_sweeps(self) -> None:
         """重画所有可见卡片的扫光（两个图元/卡片，所以可以跑满帧率）。
@@ -692,18 +730,14 @@ class ResourceList(tk.Frame):
     def _on_destroy_shine(self, event=None) -> None:
         if event is not None and event.widget is not self:
             return
-        if self._shine_job is not None:
-            try:
-                self.after_cancel(self._shine_job)
-            except tk.TclError:
-                pass
-            self._shine_job = None
-        if self._configure_job is not None:
-            try:
-                self.after_cancel(self._configure_job)
-            except tk.TclError:
-                pass
-            self._configure_job = None
+        for attr in ("_shine_job", "_fly_job", "_configure_job", "_scroll_job"):
+            job = getattr(self, attr, None)
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except tk.TclError:
+                    pass
+                setattr(self, attr, None)
 
     # ------------------------------------------------------------------ 数据
     def set_empty_hint(self, text: str) -> None:
@@ -799,6 +833,7 @@ class ResourceList(tk.Frame):
             if self._sort_key != "default":
                 self._sort_dirty = True        # 空闲时统一重排，避免逐条排序
             self._update_scrollregion()
+            self._start_fly(item)
             self.request_redraw()
         self.request_change()
 
@@ -1004,6 +1039,8 @@ class ResourceList(tk.Frame):
         for index in range(first, last):
             item = self.items[index]
             y = index * theme.ROW_HEIGHT + max(2, gap // 2)
+            # 新行从下方飞入；没有动画时偏移恒为 0
+            y += self._fly_offset(item)
             self._draw_row(index, item, y,
                            theme.ROW_HEIGHT - max(4, gap), width)
         if theme.ANIMATIONS:
@@ -1025,15 +1062,15 @@ class ResourceList(tk.Frame):
                                     tags=("wall",))
                 canvas.tag_lower("wall")
                 return
-        spec = theme.wallpaper_spec()
+        spec = theme.WALLPAPER
         win_w, win_h = self._win_size
         aspect = max(0.3, win_w / max(1.0, win_h))
         row = theme.ROW_HEIGHT
         if self.items:
             y = max(0, first - 1) * row - row / 2
         else:
-            # 空列表：用较小的步长铺满整个视口
-            row = max(theme.px(24), row // 3)
+            # 空列表：铺满整个视口。步长压到 10px 左右，渐变不会看出横条
+            row = max(theme.px(5), row // 12)
             y = top - row
         end = top + height + row
         # 顶部淡入：列表上沿紧挨着搜索区，直接切到壁纸色会出现一条硬边
@@ -1054,7 +1091,7 @@ class ResourceList(tk.Frame):
         if key == self._wall_key and self._wall_photo is not None:
             return self._wall_photo
         image = glass.window_slice(width, height, offset, self._win_size,
-                                   theme.wallpaper_spec())
+                                   theme.WALLPAPER)
         photo = glass.photo(image, key)
         if photo is None:
             return None
@@ -1415,13 +1452,91 @@ class ResourceList(tk.Frame):
         return None
 
     def _on_wheel(self, event) -> None:
-        delta = -1 if event.delta > 0 else 1
-        steps = max(1, abs(event.delta) // 120)
-        self._on_wheel_delta(delta * steps * 2)
+        """滚轮：把每格滚轮累积成位移，再缓动滚过去，不再是硬跳一格。"""
+        if not event.delta:
+            return
+        self._wheel_accum += event.delta / 120.0
+        notches = int(self._wheel_accum)
+        if notches == 0:
+            return
+        self._wheel_accum -= notches
+        # 一格滚轮 ≈ 3 个单位，向上为负
+        self._on_wheel_delta(-notches * 3)
 
     def _on_wheel_delta(self, steps: int) -> None:
-        self.canvas.yview_scroll(steps, "units")
+        step_px = theme.px(self.WHEEL_STEP)
+        # 动画还在跑时以目标位置为基准，连续滚轮就能累加，而不是互相打断
+        base = (self._scroll_goal if self._scroll_job is not None
+                else self.canvas.canvasy(0))
+        self._scroll_to(base + steps * step_px)
+
+    # ---------------------------------------------------------- 平滑滚动
+    WHEEL_STEP = 30        # 一个滚动单位对应多少像素（96 DPI 基准）
+    SCROLL_TIME = 0.16     # 缓动时长（秒）
+
+    def _scroll_extent(self) -> tuple[float, float]:
+        """可滚动总高度 + 视口高度（用 scrollregion，canvas 只会画可见行）。"""
+        total = 0.0
+        try:
+            parts = str(self.canvas.cget("scrollregion")).split()
+            if len(parts) == 4:
+                total = max(0.0, float(parts[3]) - float(parts[1]))
+        except (tk.TclError, ValueError):
+            total = 0.0
+        if total <= 0:
+            try:
+                bbox = self.canvas.bbox("all") or (0, 0, 0, 0)
+                total = max(0.0, bbox[3] - bbox[1])
+            except tk.TclError:
+                return (0.0, 0.0)
+        return (total, max(1, self.canvas.winfo_height()))
+
+    def _cancel_scroll(self) -> None:
+        if self._scroll_job is not None:
+            try:
+                self.after_cancel(self._scroll_job)
+            except tk.TclError:
+                pass
+            self._scroll_job = None
+
+    def _scroll_to(self, target: float, animate: bool = True) -> None:
+        total, view = self._scroll_extent()
+        if total <= view + 1:
+            return
+        target = max(0.0, min(total - view, target))
+        self._cancel_scroll()
+        if not animate or not theme.ANIMATIONS:
+            self._apply_scroll(target, total)
+            return
+        self._scroll_from = self.canvas.canvasy(0)
+        self._scroll_goal = target
+        self._scroll_total = total
+        self._scroll_t0 = time.monotonic()
+        if abs(target - self._scroll_from) < 1.0:
+            return
+        self._scroll_tick()
+
+    def _apply_scroll(self, y: float, total: float) -> None:
+        try:
+            self.canvas.yview_moveto(max(0.0, min(1.0, y / max(1.0, total))))
+        except tk.TclError:
+            return
         self.redraw()
+
+    def _scroll_tick(self) -> None:
+        self._scroll_job = None
+        total = self._scroll_total
+        elapsed = (time.monotonic() - self._scroll_t0) / self.SCROLL_TIME
+        if elapsed >= 1.0:
+            self._apply_scroll(self._scroll_goal, total)
+            return
+        eased = 1.0 - (1.0 - elapsed) ** 3          # ease-out，收尾更轻
+        y = self._scroll_from + (self._scroll_goal - self._scroll_from) * eased
+        self._apply_scroll(y, total)
+        try:
+            self._scroll_job = self.after(16, self._scroll_tick)
+        except tk.TclError:
+            self._scroll_job = None
 
     def _on_motion(self, event) -> None:
         index = self._row_at(event.y)

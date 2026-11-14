@@ -40,8 +40,13 @@ if (-not $Version) { throw "无法读取版本号" }
 Write-Host "StarSniff 版本: $Version" -ForegroundColor Cyan
 
 # 让 exe 的文件属性版本与代码版本保持一致（版本号只需改 __init__.py）
-$parts = @($Version.Split(".") | ForEach-Object { [int]$_ })
-while ($parts.Count -lt 4) { $parts += 0 }
+# 版本可能是 3.1.1-rc2，第四段用 rc 号，其余取每段的数字部分
+$baseVersion = ($Version -replace '-.*$', '')
+$rcNumber = 0
+if ($Version -match '-rc(\d+)') { $rcNumber = [int]$Matches[1] }
+$parts = @($baseVersion.Split(".") | ForEach-Object { [int]($_ -replace '[^0-9].*$', '') })
+while ($parts.Count -lt 3) { $parts += 0 }
+$parts = @($parts[0], $parts[1], $parts[2], $rcNumber)
 $viPath = Join-Path $Root "version_info.txt"
 $vi = Get-Content $viPath -Raw
 $vi = $vi -replace "filevers=\([^)]*\)", "filevers=($($parts[0]), $($parts[1]), $($parts[2]), $($parts[3]))"
