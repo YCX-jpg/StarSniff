@@ -360,7 +360,7 @@ class Sniffer:
             self.on_progress("加载页面并监听网络…")
             session.open_page(url, wait_load=min(15.0, ctx.options.timeout + 3))
 
-            def collect_hit(hit: dict) -> None:
+            def _collect(hit: dict) -> None:
                 htype = hit.get("type") or ""
                 u = hit.get("url") or ""
                 headers = hit.get("headers") or {}
@@ -375,17 +375,37 @@ class Sniffer:
                 elif _looks_interesting(u) and _binary_like(headers):
                     add_candidate(u, "network", headers=None)
 
+            collect_hit = _collect
             session.drain(collect_hit)
             deadline = time.time() + max(1.0, ctx.options.dynamic_wait)
+            # 自适应等待：原来是无条件等满 dynamic_wait（默认 8 秒），
+            # 但绝大多数页面前两秒就把媒体请求发完了。这里改成
+            # “连续 idle_gap 秒没有新的媒体请求就提前收工”，
+            # 上限仍然是 dynamic_wait，慢站点不受影响。
+            idle_gap = 1.2
+            min_wait = 2.0
+            began = time.time()
+            beat = {"last": began}
+
+            def collect_hit(hit: dict) -> None:
+                beat["last"] = time.time()
+                _collect(hit)
+
             if ctx.options.scroll:
                 steps = 4
                 for i in range(steps):
                     if ctx.cancelled() or time.time() > deadline:
                         break
-                    session.scroll_to_bottom(steps=1, delay=0.2)
-                    session.wait(ctx.options.dynamic_wait / (steps + 2), collect_hit)
+                    session.scroll_to_bottom(steps=1, delay=0.15)
+                    session.wait(min(0.35, max(0.1, deadline - time.time())),
+                                 collect_hit)
             while time.time() < deadline and not ctx.cancelled():
-                session.wait(min(0.5, max(0.05, deadline - time.time())), collect_hit)
+                session.wait(min(0.25, max(0.05, deadline - time.time())),
+                             collect_hit)
+                now = time.time()
+                if (now - began >= min_wait
+                        and now - beat["last"] >= idle_gap):
+                    break
             session.drain(collect_hit)
 
             # DOM 兜底
