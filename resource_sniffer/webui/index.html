@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StarSniff 星嗅</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- 壁纸：柔和渐变 + 缓慢漂移的光斑（纯 GPU 合成，不占 CPU） -->
+<div class="wall">
+  <span class="blob b1"></span>
+  <span class="blob b2"></span>
+  <span class="blob b3"></span>
+  <span class="blob b4"></span>
+</div>
+
+<div class="app">
+
+  <!-- 标题栏 -->
+  <header class="titlebar pywebview-drag-region">
+    <div class="lights">
+      <button class="light close" data-act="close" title="关闭"></button>
+      <button class="light min" data-act="minimize" title="最小化"></button>
+      <button class="light max" data-act="toggle_max" title="最大化"></button>
+    </div>
+
+    <div class="brand pywebview-drag-region">
+      <span class="mark">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path d="M12 3.2l2.3 5.1 5.5.7-4.1 3.8 1.1 5.5-4.8-2.7-4.8 2.7 1.1-5.5L4.2 9l5.5-.7z"
+                fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="name">StarSniff</span>
+      <span class="sub">星嗅</span>
+    </div>
+
+    <nav class="links">
+      <button class="link" data-act="help">帮助</button>
+      <button class="link" data-act="settings">设置</button>
+    </nav>
+  </header>
+
+  <!-- 搜索区 -->
+  <section class="hero">
+    <div class="capsule">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <input id="url" type="text" spellcheck="false"
+             placeholder="输入网页地址或资源直链，例如 https://example.com/page.html">
+      <button id="go" class="primary" data-act="start">开始</button>
+    </div>
+    <div class="hint">
+      <span class="hint-text">粘贴链接，剩下的交给星嗅</span>
+      <span class="kbd">Enter 开始 · Ctrl+F 搜索结果</span>
+    </div>
+  </section>
+
+  <!-- 工具栏 -->
+  <section class="toolbar">
+    <div class="field slim">
+      <select id="ua">
+        <option value="auto">UA: 默认（随机桌面）</option>
+        <option value="chrome">UA: Windows Chrome</option>
+        <option value="safari">UA: macOS Safari</option>
+        <option value="android">UA: Android Chrome</option>
+      </select>
+    </div>
+
+    <label class="check"><input type="checkbox" id="deep" checked><span>深度</span></label>
+    <label class="check"><input type="checkbox" id="dynamic" checked><span>动态</span></label>
+
+    <div class="spacer"></div>
+
+    <div class="field slim">
+      <select id="sort">
+        <option>排序：默认</option>
+        <option>排序：体积从大到小</option>
+        <option>排序：体积从小到大</option>
+        <option>排序：按类型</option>
+      </select>
+    </div>
+
+    <div class="field slim search">
+      <svg class="ico sm" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/>
+      </svg>
+      <input id="query" type="text" placeholder="搜索文件名 / 链接">
+    </div>
+
+    <button class="link" data-act="all">全选</button>
+    <button class="link" data-act="none">全不选</button>
+    <button class="perf-toggle" data-act="perf" id="perf"
+            title="关掉实时模糊，老显卡更流畅">
+      <i>⚡</i><span id="perf-label">性能</span>
+    </button>
+  </section>
+
+  <!-- 过滤标签 -->
+  <nav class="tabs" id="tabs">
+    <span class="pill"></span>
+    <button class="tab is-active" data-kind="all">全部 <b>0</b></button>
+    <button class="tab" data-kind="image">图片 <b>0</b></button>
+    <button class="tab" data-kind="audio">音频 <b>0</b></button>
+    <button class="tab" data-kind="video">视频 <b>0</b></button>
+    <button class="tab" data-kind="stream">流媒体 <b>0</b></button>
+  </nav>
+
+  <!-- 列表 -->
+  <main class="list" id="list">
+    <div class="empty" id="empty">
+      <span class="empty-ico">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <p>还没有嗅探到资源</p>
+      <span>在上方输入网址后点击「开始」</span>
+    </div>
+  </main>
+
+  <!-- 底栏 -->
+  <footer class="footer">
+    <div class="f-left">
+      <span class="status">等待开始…</span>
+      <span class="path">保存到 <b id="path">…</b>
+        <button class="link sm" data-act="folder">更改</button>
+        <button class="link sm" data-act="open_folder">打开</button>
+      </span>
+    </div>
+    <div class="f-right">
+      <span class="route">● 线路：自动测速</span>
+      <div class="progress"><i id="bar" style="width:0%"></i></div>
+      <span class="count" id="count">已选 0 项</span>
+      <button id="download" class="primary wide" data-act="download">下载</button>
+    </div>
+  </footer>
+
+</div>
+
+<script src="bridge.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

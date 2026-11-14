@@ -1,14 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 目录版打包配置：dist/StarSniff/StarSniff.exe。
 
-目录版不依赖 %TEMP% 解压，启动更快，也不容易被杀毒软件拦截；
-发布时整体压成 zip。单文件版见 StarSniff-onefile.spec。
+界面走「本地 HTTP 桥 + Edge 应用窗口」，所以不依赖 pythonnet / .NET；
+目录版不依赖 %TEMP% 解压，启动快，也不容易被杀毒误报。
+发布时整体压 zip（绿色版），Inno Setup 也复用这个目录做安装包。
 """
 
 from pathlib import Path
 
 ROOT = Path(SPECPATH)
 ASSETS = ROOT / "assets"
+WEBUI = ROOT / "resource_sniffer" / "webui"
 
 a = Analysis(
     [str(ROOT / "app.py")],
@@ -17,11 +19,17 @@ a = Analysis(
     datas=[
         (str(ASSETS / "starsniff.png"), "assets"),
         (str(ASSETS / "starsniff.ico"), "assets"),
+        (str(WEBUI / "index.html"), "resource_sniffer/webui"),
+        (str(WEBUI / "app.css"), "resource_sniffer/webui"),
+        (str(WEBUI / "app.js"), "resource_sniffer/webui"),
+        (str(WEBUI / "bridge.js"), "resource_sniffer/webui"),
     ],
     hiddenimports=[
         "PIL.Image",
+        "PIL.ImageGrab",
         "PIL.ImageTk",
         "PIL._tkinter_finder",
+        "tkinter.filedialog",
     ],
     hookspath=[],
     hooksconfig={},
@@ -29,6 +37,7 @@ a = Analysis(
     excludes=[
         "pytest", "numpy", "pandas", "matplotlib", "scipy", "IPython",
         "notebook", "sqlite3", "test", "unittest",
+        "webview", "clr", "pythonnet", "clr_loader", "bottle", "proxy_tools",
     ],
     noarchive=False,
     optimize=0,

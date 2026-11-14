@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     构建 StarSniff 单文件 exe，并打成可直接上传 GitHub Releases 的 zip。
@@ -98,6 +98,40 @@ $PortableHash = (Get-FileHash $Portable -Algorithm SHA256).Hash.ToLower()
 "$PortableHash  StarSniff-portable.exe" |
     Set-Content "$Portable.sha256" -Encoding ascii
 
+# ---------------------------------------------------------------- 安装程序
+# 需要 Inno Setup 6（GitHub Actions 的 windows-latest 预装了，本地可装或不装）
+$SetupPath = $null
+$Iscc = $null
+foreach ($candidate in @(
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+    if (Test-Path $candidate) { $Iscc = $candidate; break }
+}
+if (-not $Iscc) {
+    $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+    if ($cmd) { $Iscc = $cmd.Source }
+}
+
+if ($Iscc -and (Test-Path (Join-Path $Root "installer.iss"))) {
+    Write-Host "构建安装程序（Inno Setup）..." -ForegroundColor Cyan
+    # 目录版重新打包一次，供安装脚本收集文件
+    & $Python -m PyInstaller --noconfirm --clean StarSniff.spec
+    if ($LASTEXITCODE -ne 0) { throw "安装版取样打包失败" }
+    & $Iscc "/DMyAppVersion=$Version" "/DMyOutputDir=dist" (Join-Path $Root "installer.iss")
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译失败" }
+    $SetupPath = Join-Path $Root "dist\StarSniff-$Version-setup.exe"
+    if (Test-Path $SetupPath) {
+        $SetupHash = (Get-FileHash $SetupPath -Algorithm SHA256).Hash.ToLower()
+        "$SetupHash  StarSniff-$Version-setup.exe" |
+            Set-Content "$SetupPath.sha256" -Encoding ascii
+    } else {
+        Write-Host "警告：没有找到生成的安装程序" -ForegroundColor Yellow
+        $SetupPath = $null
+    }
+} else {
+    Write-Host "跳过安装程序：未找到 ISCC.exe（Inno Setup 6）" -ForegroundColor Yellow
+}
+
 $ExeSize = [math]::Round((Get-Item $Portable).Length / 1MB, 1)
 $ZipSize = [math]::Round((Get-Item $ZipPath).Length / 1MB, 1)
 
@@ -114,6 +148,9 @@ if ($ReleaseDir) {
     New-Item -ItemType Directory -Force $ReleaseDir | Out-Null
     Copy-Item -Path @($ZipPath, "$ZipPath.sha256", $Portable, "$Portable.sha256") `
         -Destination $ReleaseDir -Force
+    if ($SetupPath) {
+        Copy-Item -Path @($SetupPath, "$SetupPath.sha256") -Destination $ReleaseDir -Force
+    }
     Copy-Item -Path @("README.md", "LICENSE", "RELEASE_NOTES.md",
         "assets\starsniff.png") -Destination $ReleaseDir -Force
 }

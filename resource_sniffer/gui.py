@@ -32,7 +32,7 @@ from tkinter import filedialog, messagebox
 from typing import Optional
 
 from . import config as cfgmod
-from . import frameless, smartproxy, theme, updater, useragents
+from . import frameless, glass, smartproxy, theme, updater, useragents
 from . import __version__ as APP_VERSION
 from .config import Config
 from .downloader import DownloadManager, DownloadTask
@@ -251,6 +251,25 @@ class MainWindow(tk.Tk):
             self._build_neon_body(self._shell)
         else:
             self._build_standard_body(self._shell)
+        if theme.GLASS and glass.available():
+            # 换主题时窗口尺寸没变、Configure 可能不再触发：这里主动补一次，
+            # 否则壁纸和磨砂卡片会一直是白板。
+            for delay, job in ((300, self._flush_hero),
+                               (340, self._flush_body),
+                               (380, self._redraw_glass_list),
+                               (420, self._flush_footer)):
+                try:
+                    self.after(delay, job)
+                except tk.TclError:
+                    pass
+
+    def _redraw_glass_list(self) -> None:
+        view = getattr(self, "list_view", None)
+        if view is not None:
+            try:
+                view.redraw()
+            except tk.TclError:
+                pass
 
     def _build_standard_body(self, parent) -> None:
         body = tk.Frame(parent, bg=theme.BG)
@@ -493,7 +512,9 @@ class MainWindow(tk.Tk):
             delay = theme.frame_delay()
             self._header_phase = (self._header_phase
                                   + 0.25 * delay / 1000.0) % 1.0
-            self._draw_header_sheen()
+            # 拖窗口 / 缩放时先不画彩光，把 CPU 让给布局
+            if not glass.busy():
+                self._draw_header_sheen()
             self._header_job = self.after(delay, self._header_light_tick)
         except tk.TclError:
             self._header_job = None
@@ -583,6 +604,7 @@ class MainWindow(tk.Tk):
         frameless.begin_drag(self, event)
 
     def _title_drag(self, event) -> None:
+        glass.set_busy(0.25)
         frameless.do_drag(self, event)
 
     def _minimize(self) -> None:
@@ -701,7 +723,7 @@ class MainWindow(tk.Tk):
         hero.pack(fill="x")
         self._hero_glass = hero
         self._hero_pad = (pad, gap)
-        hero.bind("<Configure>", lambda _e: self._layout_glass_hero())
+        hero.bind("<Configure>", lambda _e: self._defer_hero())
 
         capsule = tk.Frame(hero, bg=theme.CARD, highlightthickness=1,
                            highlightbackground=theme.BORDER_LIGHT,
@@ -903,7 +925,7 @@ class MainWindow(tk.Tk):
         host = tk.Canvas(parent, bg=theme.BG, highlightthickness=0, bd=0)
         host.pack(fill="both", expand=True)
         self._glass_body = host
-        host.bind("<Configure>", lambda _e: self._paint_body_wallpaper())
+        host.bind("<Configure>", lambda _e: self._defer_body())
         pad = theme.px(26)
         inner = tk.Frame(host, bg=theme.BG)
         inner.place(x=pad, y=0, relwidth=1.0, relheight=1.0,
@@ -921,12 +943,40 @@ class MainWindow(tk.Tk):
             width = canvas.winfo_width()
             height = canvas.winfo_height()
             if width <= 1 or height <= 1:
+                # 刚建好还没布局：等一拍再画，否则壁纸会一直是白的
+                tries = getattr(self, "_wall_retry", 0)
+                if tries < 20:
+                    self._wall_retry = tries + 1
+                    self.after(60, lambda: self._paint_wallpaper_canvas(
+                        canvas, fade, tag))
                 return
+            self._wall_retry = 0
             top = canvas.winfo_toplevel()
             offset = (canvas.winfo_rootx() - top.winfo_rootx(),
                       canvas.winfo_rooty() - top.winfo_rooty())
             win = (max(top.winfo_width(), width),
                    max(top.winfo_height(), height))
+            if (glass.available() and theme.GLASS and not theme.NEON
+                    and not glass.busy()):
+                # 有 Pillow 时直接贴真实壁纸位图（和列表里的磨砂玻璃同源）
+                image = glass.window_slice(
+                    width, height, offset, win, theme.WALLPAPER,
+                    fade_bottom=0.42 if fade else 0.0, fade_color=theme.BG)
+                photo = glass.photo(
+                    image, ("hero", width, height, offset[0] // 48,
+                            offset[1] // 48, fade))
+                if photo is not None:
+                    self._wall_ref = photo
+                    canvas.delete(tag)
+                    canvas.create_image(0, 0, anchor="nw", image=photo,
+                                        tags=tag)
+                    return
+            if glass.busy():
+                canvas.delete(tag)
+                canvas.create_rectangle(0, 0, width, height,
+                                        fill=theme.BG, outline=theme.BG,
+                                        tags=tag)
+                return
             paint_wallpaper(canvas, width, height, offset=offset, win=win,
                             tag=tag)
             if not fade:
@@ -953,6 +1003,43 @@ class MainWindow(tk.Tk):
         host = getattr(self, "_glass_body", None)
         if host is not None:
             self._paint_wallpaper_canvas(host)
+
+    def _defer_hero(self) -> None:
+        """缩放时合并 hero 的重排/重绘，避免每个 Configure 都算一张壁纸。"""
+        glass.set_busy(0.28)
+        job = getattr(self, "_hero_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+        try:
+            self._hero_job = self.after(250, self._flush_hero)
+        except tk.TclError:
+            self._hero_job = None
+
+    def _flush_hero(self) -> None:
+        self._hero_job = None
+        glass.set_busy(0)
+        self._layout_glass_hero()
+
+    def _defer_body(self) -> None:
+        glass.set_busy(0.28)
+        job = getattr(self, "_body_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+        try:
+            self._body_job = self.after(280, self._flush_body)
+        except tk.TclError:
+            self._body_job = None
+
+    def _flush_body(self) -> None:
+        self._body_job = None
+        glass.set_busy(0)
+        self._paint_body_wallpaper()
 
     def _build_neon_body(self, parent) -> None:
         body = tk.Frame(parent, bg=theme.BG)
@@ -995,6 +1082,9 @@ class MainWindow(tk.Tk):
         pad = theme.px(int(self._layout.get("content_pad", 18)))
         self._progress_value = 0.0
         if style == "floating":
+            if theme.GLASS and glass.available():
+                self._build_glass_footer(parent)
+                return
             panel = tk.Frame(parent, bg=theme.PANEL, highlightthickness=1,
                              highlightbackground=theme.BORDER_LIGHT)
             panel.pack(fill="x", padx=theme.px(24),
@@ -1038,6 +1128,151 @@ class MainWindow(tk.Tk):
             fill="x", padx=pad, pady=(theme.px(6), 0))
         self._make_action_row(parent, padx=pad,
                               pady=(theme.px(10), theme.px(14)))
+
+    # ---- 液态玻璃底栏：一块浮在壁纸上的磨砂玻璃条 ----
+    def _build_glass_footer(self, parent) -> None:
+        """底栏不再是实心白条，而是一块圆角磨砂玻璃，内容嵌在玻璃内部。
+
+        Tk 控件没有透明背景，所以玻璃图片画在 Canvas 上，内容用
+        ``create_window`` 叠在上面；内容容器的底色随后按玻璃主体色重新
+        着色（``_retint``），接缝就看不出来了。
+        """
+        pad = theme.px(24)
+        wrap = tk.Frame(parent, bg=theme.BG)
+        wrap.pack(fill="x", padx=pad, pady=(theme.px(2), theme.px(16)))
+        canvas = tk.Canvas(wrap, bg=theme.BG, highlightthickness=0, bd=0,
+                           height=theme.px(92))
+        canvas.pack(fill="x")
+        self._footer_glass = canvas
+        self._footer_fill = theme.blend(theme.CARD, theme.PANEL, 0.45)
+
+        inner = tk.Frame(canvas, bg=self._footer_fill)
+        self._footer_inner = inner
+        self._make_status_row(inner, padx=theme.px(20),
+                              pady=(theme.px(12), theme.px(2)),
+                              bg=self._footer_fill)
+        self._footer_sep = tk.Frame(
+            inner, bg=theme.blend(theme.BORDER, self._footer_fill, 0.55),
+            height=1)
+        self._footer_sep.pack(fill="x", padx=theme.px(20),
+                              pady=(theme.px(4), 0))
+        self._make_action_row(inner, padx=theme.px(20),
+                              pady=(theme.px(10), theme.px(12)),
+                              bg=self._footer_fill)
+        inner.update_idletasks()
+        inset = theme.px(7)
+        height = max(theme.px(86), inner.winfo_reqheight() + inset * 2)
+        canvas.configure(height=height)
+        self._footer_inset = inset
+        self._footer_item = canvas.create_window(
+            inset, inset, anchor="nw", window=inner,
+            width=max(80, theme.px(560)), height=max(40, height - inset * 2))
+        canvas.bind("<Configure>", lambda _e: self._defer_footer())
+
+    def _draw_footer_glass(self) -> None:
+        canvas = getattr(self, "_footer_glass", None)
+        item = getattr(self, "_footer_item", None)
+        if canvas is None or item is None:
+            return
+        try:
+            width = canvas.winfo_width()
+            height = canvas.winfo_height()
+        except tk.TclError:
+            return
+        if width <= 1 or height <= 1:
+            return
+        inset = getattr(self, "_footer_inset", theme.px(7))
+        # 内容高度要按当前字体/DPI 重新量一次：构建那一刻可能还没布局完，
+        # 否则下载按钮会被玻璃条的下边缘裁掉。
+        inner = getattr(self, "_footer_inner", None)
+        need = height
+        if inner is not None:
+            try:
+                need = inner.winfo_reqheight() + inset * 2
+            except tk.TclError:
+                need = height
+        if need > height + 2:
+            try:
+                canvas.configure(height=need)
+            except tk.TclError:
+                pass
+            height = need
+        try:
+            canvas.coords(item, inset, inset)
+            canvas.itemconfigure(item, width=max(80, width - inset * 2),
+                                 height=max(40, height - inset * 2))
+        except tk.TclError:
+            pass
+        if glass.busy():
+            return
+        try:
+            top = canvas.winfo_toplevel()
+            offset = (canvas.winfo_rootx() - top.winfo_rootx(),
+                      canvas.winfo_rooty() - top.winfo_rooty())
+            win = (max(top.winfo_width(), width),
+                   max(top.winfo_height(), height))
+            image = glass.frosted_panel(
+                width, height, theme.px(26), theme.WALLPAPER, offset, win,
+                white=0.34, blur=max(6.0, theme.px(9)), rim=0.9,
+                accent=(theme.ACCENT, 0.05))
+            photo = glass.photo(
+                image, ("footer", width, height, offset[0] // 24,
+                        offset[1] // 24))
+            if photo is None:
+                return
+            self._footer_ref = photo
+            canvas.delete("footer")
+            canvas.create_image(0, 0, anchor="nw", image=photo,
+                                tags=("footer",))
+            canvas.tag_lower("footer")
+            fill = glass.average_color(image)
+            if fill != getattr(self, "_footer_fill", None):
+                self._footer_fill = fill
+                self._retint(self._footer_inner, fill)
+                try:
+                    self._footer_sep.configure(
+                        bg=theme.blend(theme.BORDER, fill, 0.55))
+                except (AttributeError, tk.TclError):
+                    pass
+        except tk.TclError:
+            pass
+
+    def _retint(self, widget, color: str) -> None:
+        """把子树里所有实心背景换成玻璃主体色（跳过自绘按钮的边框层）。"""
+        try:
+            cls = widget.winfo_class()
+        except tk.TclError:
+            return
+        if cls in ("Frame", "Label"):
+            try:
+                widget.configure(bg=color)
+            except tk.TclError:
+                pass
+        elif cls == "Canvas":
+            try:
+                widget.configure(bg=color)
+            except tk.TclError:
+                pass
+        for child in list(widget.winfo_children()):
+            self._retint(child, color)
+
+    def _defer_footer(self) -> None:
+        glass.set_busy(0.28)
+        job = getattr(self, "_footer_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass
+        try:
+            self._footer_job = self.after(260, self._flush_footer)
+        except tk.TclError:
+            self._footer_job = None
+
+    def _flush_footer(self) -> None:
+        self._footer_job = None
+        glass.set_busy(0)
+        self._draw_footer_glass()
 
     def _make_status_row(self, parent, padx: int, pady,
                          bg: str = "") -> None:
@@ -2058,7 +2293,8 @@ class MainWindow(tk.Tk):
             self.downloader.stop()
         except Exception:
             pass
-        for attr in ("_pump_job", "_update_job", "_header_job"):
+        for attr in ("_pump_job", "_update_job", "_header_job",
+                     "_hero_job", "_body_job", "_footer_job"):
             try:
                 job = getattr(self, attr, None)
                 if job is not None:

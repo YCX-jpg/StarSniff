@@ -9,7 +9,7 @@ import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Callable, Optional
 
-from . import theme
+from . import glass, theme
 from .mediainfo import fmt_size
 
 
@@ -110,7 +110,7 @@ def glass_surface(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
     backdrop = backdrop or theme.BG
     tags = tuple(tags) or ()
     # 投影：浅色玻璃更需要阴影才能“浮”在壁纸上
-    shade = (theme.blend("#000000", backdrop, 0.45) if dark
+    shade = (theme.blend("#000000", backdrop, 0.30) if dark
              else theme.blend("#55698a", backdrop, 0.15))
     round_rect(canvas, x1, y1 + p(2), x2, y2 + p(2), radius, fill=shade,
                outline="", tags=tags)
@@ -119,7 +119,7 @@ def glass_surface(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
     inset = max(p(5), radius * 0.45)
     bands = 22
     top_boost = 0.12 if dark else 0.66
-    bottom_shade = 0.24 if dark else 0.10
+    bottom_shade = 0.15 if dark else 0.10
     for index in range(bands):
         t = index / max(1, bands - 1)
         if t < 0.62:
@@ -145,11 +145,11 @@ def glass_surface(canvas: tk.Canvas, x1, y1, x2, y2, radius, base: str,
                        width=1, tags=tags)
     canvas.create_line(x2 - p(1), y1 + radius * 0.7,
                        x2 - p(1), y2 - radius * 0.7,
-                       fill=theme.blend("#000000", base, 0.26 if dark else 0.09),
+                       fill=theme.blend("#000000", base, 0.13 if dark else 0.09),
                        width=1, tags=tags)
     canvas.create_line(x1 + radius * 0.7, y2 - p(1),
                        x2 - radius * 0.7, y2 - p(1),
-                       fill=theme.blend("#000000", base, 0.34 if dark else 0.16),
+                       fill=theme.blend("#000000", base, 0.17 if dark else 0.16),
                        width=1, tags=tags)
     if mode == "glass" and height > p(64):
         # 底部折射带：环境光从下方穿入，带强调色——浅色玻璃的“颜色”来源
@@ -602,6 +602,11 @@ class ResourceList(tk.Frame):
         self._card_boxes: list[tuple] = []
         self._win_size = (0, 0)
         self._win_offset = (0, 0)
+        # Pillow 生成的磨砂玻璃图（按尺寸/位置缓存，避免每帧重算）
+        self._card_photos: dict[tuple, object] = {}
+        self._wall_photo = None
+        self._wall_key = None
+        self._configure_job = None
         # 批量插入时合并重绘，避免 N 次全表刷新
         self._redraw_pending = False
         self._change_pending = False
@@ -624,7 +629,7 @@ class ResourceList(tk.Frame):
         self.scroll.pack(side="right", fill="y", padx=(0, 2), pady=2)
         self.canvas.configure(yscrollcommand=self.scroll.set)
 
-        self.canvas.bind("<Configure>", lambda _e: self.redraw())
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.bind("<MouseWheel>", self._on_wheel)
         self.canvas.bind("<Button-4>", lambda _e: self._on_wheel_delta(-3))
         self.canvas.bind("<Button-5>", lambda _e: self._on_wheel_delta(3))
@@ -654,7 +659,8 @@ class ResourceList(tk.Frame):
                 return
             delay = theme.frame_delay()
             self._shine_phase = (self._shine_phase + 0.45 * delay / 1000.0) % 1.0
-            if self._card_boxes and self.winfo_ismapped():
+            if (self._card_boxes and self.winfo_ismapped()
+                    and not glass.busy()):
                 self._draw_sweeps()
             self._shine_job = self.after(delay, self._shine_tick)
         except tk.TclError:
@@ -692,6 +698,12 @@ class ResourceList(tk.Frame):
             except tk.TclError:
                 pass
             self._shine_job = None
+        if self._configure_job is not None:
+            try:
+                self.after_cancel(self._configure_job)
+            except tk.TclError:
+                pass
+            self._configure_job = None
 
     # ------------------------------------------------------------------ 数据
     def set_empty_hint(self, text: str) -> None:
@@ -998,18 +1010,24 @@ class ResourceList(tk.Frame):
             self._draw_sweeps()
 
     def _paint_row_backgrounds(self, width: int, first: int, last: int) -> None:
-        """铺壁纸底色：让玻璃卡片看起来浮在壁纸上。
-
-        用按行切片的竖向渐变代替整张位图：十几条色块，滚动时跟着内容走，
-        开销极小，又比纯色平铺更像一张壁纸。
-        """
+        """铺壁纸：有 Pillow 时直接贴真实的壁纸位图，否则退回按行渐变。"""
         canvas = self.canvas
+        top = canvas.canvasy(0)
+        height = max(canvas.winfo_height(), 100)
+        ox, oy = self._win_offset
+        if glass.available() and theme.GLASS and not theme.NEON:
+            photo = (None if glass.busy() else
+                     self._wallpaper_photo(int(width), int(height),
+                                           (int(ox), int(oy + top))))
+            if photo is not None:
+                canvas.delete("wall")
+                canvas.create_image(0, top, anchor="nw", image=photo,
+                                    tags=("wall",))
+                canvas.tag_lower("wall")
+                return
         spec = theme.wallpaper_spec()
         win_w, win_h = self._win_size
         aspect = max(0.3, win_w / max(1.0, win_h))
-        ox, oy = self._win_offset
-        top = canvas.canvasy(0)
-        height = max(canvas.winfo_height(), 100)
         row = theme.ROW_HEIGHT
         if self.items:
             y = max(0, first - 1) * row - row / 2
@@ -1030,6 +1048,78 @@ class ResourceList(tk.Frame):
                                     outline=color, tags=("wall",))
             y += row
         canvas.tag_lower("wall")
+
+    def _wallpaper_photo(self, width: int, height: int, offset: tuple[int, int]):
+        key = ("wall", width, height, offset[0] // 48, offset[1] // 48)
+        if key == self._wall_key and self._wall_photo is not None:
+            return self._wall_photo
+        image = glass.window_slice(width, height, offset, self._win_size,
+                                   theme.wallpaper_spec())
+        photo = glass.photo(image, key)
+        if photo is None:
+            return None
+        self._wall_key = key
+        self._wall_photo = photo
+        return photo
+
+    def _on_canvas_configure(self, _event=None) -> None:
+        """窗口缩放时不要每一步都重画磨砂玻璃：合并成一次。
+
+        生成一张磨砂卡片要 20~30ms，缩放时 Configure 会连发几十次，
+        全部同步处理就会卡死（连标题栏拖动都像没反应）。缩放期间先用
+        纯色顶住，停下来 250ms 后再把真玻璃画上。
+        """
+        if not (glass.available() and theme.GLASS and not theme.NEON):
+            self.redraw()
+            return
+        glass.set_busy(0.28)
+        if self._configure_job is not None:
+            try:
+                self.after_cancel(self._configure_job)
+            except tk.TclError:
+                pass
+        try:
+            self._configure_job = self.after(250, self._flush_configure)
+        except tk.TclError:
+            self._configure_job = None
+
+    def _flush_configure(self) -> None:
+        self._configure_job = None
+        glass.set_busy(0)
+        try:
+            self.redraw()
+        except tk.TclError:
+            pass
+
+    def _card_photo(self, x1: float, y: float, x2: float, h: float,
+                    accented: bool = False):
+        """磨砂玻璃卡片：从壁纸上裁一块、模糊、混白、圆角 + 亮边。"""
+        if not (glass.available() and theme.GLASS and not theme.NEON):
+            return None
+        if glass.busy():
+            return None
+        width, height = int(round(x2 - x1)), int(round(h))
+        if width < 24 or height < 16:
+            return None
+        top = self.canvas.canvasy(0)
+        offset = (int(x1) // 32 * 32,
+                  int(self._win_offset[1] + y - top) // 32 * 32)
+        key = (width, height, offset, accented)
+        photo = self._card_photos.get(key)
+        if photo is not None:
+            return photo
+        image = glass.frosted_panel(
+            width, height, theme.card_radius(), theme.WALLPAPER,
+            offset=offset, win=self._win_size, white=0.30, rim=0.92,
+            shadow=True,
+            accent=(theme.ACCENT, 0.18) if accented else ())
+        photo = glass.to_photo(image)
+        if photo is None:
+            return None
+        if len(self._card_photos) > 24:
+            self._card_photos.clear()
+        self._card_photos[key] = photo
+        return photo
 
     def _draw_empty(self, width: int, height: int) -> None:
         """空列表：居中图标 + 标题 + 说明。"""
@@ -1087,18 +1177,25 @@ class ResourceList(tk.Frame):
                 fill = theme.blend(theme.CARD_HOVER, base, 0.55)
             else:
                 fill = base
-            glass_surface(
-                canvas, x1, y, x2, y + h, theme.card_radius(), fill,
-                phase=(self._shine_phase + index * 0.11) % 1.0,
-                mode="acrylic" if theme.ACRYLIC else "glass",
-                accent=theme.ACCENT, backdrop=theme.BG,
-                sweep=not theme.ANIMATIONS)
-            anchor = round_rect(
-                canvas, x1, y, x2, y + h, theme.card_radius(),
-                fill="", outline=theme.blend(theme.BORDER_LIGHT, fill, 0.55),
-                width=1)
-            if theme.ANIMATIONS:
-                self._card_boxes.append((index, x1, y, x2, h, fill, anchor))
+            photo = self._card_photo(x1, y, x2, h,
+                                     accented=bool(checked or selected))
+            if photo is not None:
+                # 真实磨砂玻璃：模糊后的壁纸 + 亮边，图里已经带了阴影留白
+                canvas.create_image(x1 - glass.PAD, y - glass.PAD,
+                                    anchor="nw", image=photo)
+            else:
+                glass_surface(
+                    canvas, x1, y, x2, y + h, theme.card_radius(), fill,
+                    phase=(self._shine_phase + index * 0.11) % 1.0,
+                    mode="acrylic" if theme.ACRYLIC else "glass",
+                    accent=theme.ACCENT, backdrop=theme.BG,
+                    sweep=not theme.ANIMATIONS)
+                anchor = round_rect(
+                    canvas, x1, y, x2, y + h, theme.card_radius(),
+                    fill="", outline=theme.blend(theme.BORDER_LIGHT, fill, 0.55),
+                    width=1)
+                if theme.ANIMATIONS:
+                    self._card_boxes.append((index, x1, y, x2, h, fill, anchor))
         elif style == "flat":
             fill = (theme.SELECTED_ROW if checked else
                     theme.ROW_HOVER if (selected or hovered) else theme.PANEL)
@@ -1280,12 +1377,24 @@ class ResourceList(tk.Frame):
                                font=(theme.FONT_FAMILY, max(9, int(13 * k)),
                                      "bold"))
         main, sub = item.preview_lines()
-        if main:
-            canvas.create_text(cx, y + size - 16, text=main, fill=theme.FG,
-                               font=self.f_preview)
-        if sub:
-            canvas.create_text(cx, y + size - 6, text=sub, fill=theme.FG_DIM,
-                               font=self.f_tiny)
+        if main or sub:
+            # 关键参数压在一个小胶囊上，别直接浮在缩略图上（会和图标打架）
+            lines = [text for text in (main, sub) if text]
+            width = max(self.f_preview.measure(main or ""),
+                        self.f_tiny.measure(sub or "")) + p(12)
+            height = p(14) + p(11) * (len(lines) - 1)
+            left = x + (size - width) / 2
+            bottom = y + size - p(4)
+            top = bottom - height
+            round_rect(canvas, left, top, left + width, bottom,
+                       p(6), fill=theme.blend("#000000", theme.THUMB_BG, 0.62),
+                       outline="")
+            for index, text in enumerate(lines):
+                canvas.create_text(
+                    left + width / 2, top + p(7) + p(11) * index, text=text,
+                    fill="#ffffff" if index == 0 else theme.blend(
+                        "#ffffff", theme.THUMB_BG, 0.72),
+                    font=self.f_preview if index == 0 else self.f_tiny)
 
     def _draw_waveform(self, cx: float, cy: float, color: str,
                        k: float = 1.0) -> None:
@@ -1453,6 +1562,8 @@ class SegmentedTabs(tk.Canvas):
         self._slide_t = 1.0
         self._slide_job = None
         self._lens_font: Optional[tkfont.Font] = None
+        self._bar_cache: dict[tuple, object] = {}
+        self._bar_photo_ref = None
         for key, label in options:
             self._base_labels[key] = label
         self.bind("<Button-1>", self._on_click)
@@ -1556,12 +1667,17 @@ class SegmentedTabs(tk.Canvas):
                                   outline=theme.BORDER_LIGHT)
             self.create_line(1, 1, total - 1, 1, fill="#ffffff")
         elif style == "capsule":
-            glass_surface(self, 0, 0, total, h, theme.card_radius(),
-                          theme.SEGMENT_BG,
-                          phase=(time.time() * 0.12) % 1.0,
-                          mode="glass", accent=theme.ACCENT)
-            round_rect(self, 0, 0, total, h, theme.card_radius(),
-                       fill="", outline=theme.BORDER_LIGHT, width=1)
+            bar_photo = self._bar_photo(total, h)
+            if bar_photo is not None:
+                self.create_image(-glass.PAD, -glass.PAD, anchor="nw",
+                                  image=bar_photo)
+            else:
+                glass_surface(self, 0, 0, total, h, theme.card_radius(),
+                              theme.SEGMENT_BG,
+                              phase=(time.time() * 0.12) % 1.0,
+                              mode="glass", accent=theme.ACCENT)
+                round_rect(self, 0, 0, total, h, theme.card_radius(),
+                           fill="", outline=theme.BORDER_LIGHT, width=1)
         else:
             round_rect(self, 0, 0, total, h, theme.card_radius(),
                        fill=theme.SEGMENT_BG, outline="", width=1)
@@ -1572,8 +1688,6 @@ class SegmentedTabs(tk.Canvas):
         blob = self._blob_span() if style == "capsule" else None
         if blob is not None:
             self._draw_blob(blob[0], blob[1], pad, h)
-        lens = self._bubble_geom(h) if (style == "capsule"
-                                        and theme.ANIMATIONS) else None
         for left, right, key in self._boxes:
             active = key == self._current
             if theme.CLASSIC or style == "tabs":
@@ -1594,9 +1708,6 @@ class SegmentedTabs(tk.Canvas):
                            theme.button_radius(), fill=theme.ROW_HOVER,
                            outline="")
             center = (left + right) / 2
-            # 球盖住的那一格不再画原字，改为球内放大版，才像真的透镜
-            if lens is not None and abs(center - lens[0]) < lens[2] * 0.92:
-                continue
             font = self._font_active if active else self._font
             if style == "capsule":
                 # 文字颜色跟着液体块走：块还没到之前保持深色，别出现"白字消失了"
@@ -1609,8 +1720,6 @@ class SegmentedTabs(tk.Canvas):
                 color = theme.FG if active else theme.FG_DIM
             self.create_text(center, h / 2,
                              text=self._label_for(key), fill=color, font=font)
-        if lens is not None:
-            self._draw_bubble(pad, h, lens)
 
     # ------------------------------------------------ 液态玻璃：指示块与玻璃球
     def _blob_span(self):
@@ -1655,95 +1764,39 @@ class SegmentedTabs(tk.Canvas):
                              fill=theme.blend("#ffffff", accent, 0.45),
                              width=1)
 
-    def _bubble_geom(self, h: int):
-        """玻璃球当前的位置与形状：返回 (cx, cy, rx, ry, fade)，隐藏时 None。"""
-        if not (self._slide_from and self._slide_to):
+    def _bar_photo(self, width: float, height: int):
+        """胶囊本身用真实的磨砂玻璃图（模糊的壁纸 + 亮边 + 阴影）。"""
+        if not (glass.available() and theme.GLASS and not theme.NEON):
             return None
-        if self._slide_t >= 1.0:
+        if glass.busy():
             return None
-        t = max(0.0, min(1.0, self._slide_t))
-        eased = 1 - (1 - t) ** 3
-        cx_from = (self._slide_from[0] + self._slide_from[1]) / 2
-        cx_to = (self._slide_to[0] + self._slide_to[1]) / 2
-        cx = cx_from + (cx_to - cx_from) * eased
-        cy = h / 2
-        radius = h * 0.47
-        travel = min(1.0, abs(cx_to - cx_from) / max(1.0, radius * 4.0))
-        squash = 1.0 + 0.22 * math.sin(math.pi * min(1.0, t * 1.3)) * travel
-        fade = 1.0 if t < 0.55 else max(0.0, 1.0 - (t - 0.55) / 0.45)
-        if fade <= 0.02:
+        width = int(round(width))
+        if width < 24 or height < 12:
             return None
-        return (cx, cy, radius * squash, radius / squash, fade)
+        try:
+            top = self.winfo_toplevel()
+            x = self.winfo_rootx() - top.winfo_rootx()
+            y = self.winfo_rooty() - top.winfo_rooty()
+            win = (top.winfo_width(), top.winfo_height())
+        except tk.TclError:
+            return None
+        key = (width, height, x // 32, y // 32)
+        photo = self._bar_cache.get(key)
+        if photo is not None:
+            return photo
+        image = glass.frosted_panel(
+            width, height, height // 2, theme.WALLPAPER,
+            offset=(x, y), win=win, white=0.30, blur=7, rim=0.95,
+            shadow=True)
+        photo = glass.to_photo(image)
+        if photo is None:
+            return None
+        if len(self._bar_cache) > 8:
+            self._bar_cache.clear()
+        self._bar_cache[key] = photo
+        self._bar_photo_ref = photo
+        return photo
 
-    def _draw_bubble(self, pad: int, h: int, lens: tuple) -> None:
-        """液态玻璃球：切换页签时从旧位置滚到新位置，途中把它盖住的内容放大。
-
-        Tk 没有真正的折射：用「亮边 + 磨砂玻璃体 + 高光 + 焦散 + 放大的液体块
-        和文字」拼出透镜观感。被球盖住的那一格的原字会先跳过，球里只画放大版，
-        看起来就像内容被折射放大了。
-        """
-        cx, cy, rx, ry, fade = lens
-        bar = theme.SEGMENT_BG
-        accent = theme.ACCENT
-
-        def toward(color: str, weight: float = 1.0) -> str:
-            # 淡出 = 把颜色往胶囊底色里融
-            return theme.blend(color, bar, fade * weight)
-
-        body = toward(theme.blend("#ffffff", bar, 0.34))
-        self.create_oval(cx - rx, cy - ry, cx + rx, cy + ry, fill=body,
-                         outline="")
-        # 边缘一圈略深，做出玻璃的"厚度"
-        self.create_oval(cx - rx * 0.99, cy - ry * 0.99,
-                         cx + rx * 0.99, cy + ry * 0.99,
-                         fill=toward(theme.blend(bar, "#ffffff", 0.65), 0.55),
-                         outline="")
-        self.create_oval(cx - rx * 0.82, cy - ry * 0.82,
-                         cx + rx * 0.82, cy + ry * 0.82,
-                         fill=body, outline="")
-        # 亮边 + 外侧极细的暗边，让球从胶囊上"浮"起来
-        self.create_oval(cx - rx, cy - ry, cx + rx, cy + ry,
-                         outline=toward("#ffffff", 0.95),
-                         width=max(2, theme.px(2)))
-        self.create_oval(cx - rx - 1, cy - ry - 1, cx + rx + 1, cy + ry + 1,
-                         outline=toward(theme.blend(accent, "#000000", 0.25),
-                                        0.35), width=1)
-        # 放大后的液体块 + 文字
-        box = min(self._boxes, key=lambda b: abs((b[0] + b[1]) / 2 - cx),
-                  default=None)
-        if box is None:
-            return
-        # 球里至少要有东西：先画一块放大的液体块，文字放得下再叠上去
-        text = self._base_labels.get(box[2], "")
-        active = box[2] == self._current
-        if self._lens_font is None:
-            size = max(8, int(round(theme.FONT_SMALL[1] * 1.15)))
-            self._lens_font = tkfont.Font(
-                family=theme.FONT_FAMILY, size=size, weight="bold")
-        text_w = self._lens_font.measure(text) if text else 0
-        blob_w = min(2 * rx * 0.82, max(theme.px(26), text_w + theme.px(18)))
-        round_rect(self, cx - blob_w / 2, cy - ry * 0.52,
-                   cx + blob_w / 2, cy + ry * 0.52, theme.px(10),
-                   fill=toward(accent, 0.96), outline="")
-        if text and text_w <= 2 * rx * 0.80:
-            self.create_text(cx, cy, text=text, fill=toward("#ffffff", 0.97),
-                             font=self._lens_font)
-        # 左上镜面高光：贴着内缘，别糊在球中间的文字上
-        hx, hy = cx - rx * 0.56, cy - ry * 0.60
-        self.create_oval(hx - rx * 0.19, hy - ry * 0.11,
-                         hx + rx * 0.19, hy + ry * 0.11,
-                         fill=toward("#ffffff", 0.16), outline="")
-        self.create_oval(hx - rx * 0.085, hy - ry * 0.048,
-                         hx + rx * 0.085, hy + ry * 0.048,
-                         fill=toward("#ffffff", 0.92), outline="")
-        # 右下焦散：一道细小的暖白反光
-        gx, gy = cx + rx * 0.60, cy + ry * 0.56
-        self.create_oval(gx - rx * 0.13, gy - ry * 0.08,
-                         gx + rx * 0.13, gy + ry * 0.08,
-                         fill=toward("#fff3d6", 0.26), outline="")
-        self.create_oval(gx - rx * 0.048, gy - ry * 0.028,
-                         gx + rx * 0.048, gy + ry * 0.028,
-                         fill=toward("#fffdf6", 0.80), outline="")
 
     # ------------------------------------------------------------------ 交互
     def _key_at(self, x: float) -> Optional[str]:
