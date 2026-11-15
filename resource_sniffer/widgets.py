@@ -615,6 +615,12 @@ class ResourceList(tk.Frame):
         # 新行飞入：id(item) -> 开始时间戳（错峰），跑完就清空
         self._fly: dict[int, float] = {}
         self._fly_job = None
+        # 勾选动画：id(item) -> 开始时间戳（复选框弹一下 + 勾线生长）
+        self._check_anim: dict[int, float] = {}
+        self._check_job = None
+        # 空列表时放大镜呼吸：0..1 的相位
+        self._empty_phase = 0.0
+        self._empty_job = None
         # 平滑滚动
         self._scroll_job = None
         self._scroll_t0 = 0.0
@@ -704,6 +710,71 @@ class ResourceList(tk.Frame):
             except tk.TclError:
                 self._fly_job = None
 
+    # ------------------------------------------------------ 勾选 / 空状态动画
+    CHECK_TIME = 0.30      # 勾选动画时长（秒）
+
+    def _start_check_anim(self, item) -> None:
+        """勾选/取消时让复选框弹一下（只有开启动画时）。"""
+        if not theme.ANIMATIONS:
+            return
+        self._check_anim[id(item)] = time.monotonic()
+        if self._check_job is None:
+            try:
+                self._check_job = self.after(16, self._check_tick)
+            except tk.TclError:
+                self._check_job = None
+
+    def _check_progress(self, item) -> Optional[float]:
+        start = self._check_anim.get(id(item))
+        if start is None:
+            return None
+        elapsed = time.monotonic() - start
+        if elapsed >= self.CHECK_TIME:
+            self._check_anim.pop(id(item), None)
+            return 1.0
+        return max(0.0, min(1.0, elapsed / self.CHECK_TIME))
+
+    def _check_tick(self) -> None:
+        self._check_job = None
+        now = time.monotonic()
+        for key, start in list(self._check_anim.items()):
+            if now - start >= self.CHECK_TIME:
+                self._check_anim.pop(key, None)
+        try:
+            self.redraw()
+        except tk.TclError:
+            return
+        if self._check_anim:
+            try:
+                self._check_job = self.after(16, self._check_tick)
+            except tk.TclError:
+                self._check_job = None
+
+    def _ensure_empty_tick(self) -> None:
+        """空列表时让放大镜慢慢呼吸；有内容后自动停掉。"""
+        if not theme.ANIMATIONS or self._empty_job is not None:
+            return
+        try:
+            self._empty_job = self.after(50, self._empty_tick)
+        except tk.TclError:
+            self._empty_job = None
+
+    def _empty_tick(self) -> None:
+        self._empty_job = None
+        if self.items or not theme.ANIMATIONS:
+            return
+        try:
+            if not self.winfo_ismapped():
+                return          # 窗口最小化/隐藏时停摆，回来时由 Configure 重启
+        except tk.TclError:
+            return
+        self._empty_phase = (self._empty_phase + 0.045) % 1.0
+        try:
+            self.redraw()
+        except tk.TclError:
+            return
+        self._ensure_empty_tick()
+
     def _draw_sweeps(self) -> None:
         """重画所有可见卡片的扫光（两个图元/卡片，所以可以跑满帧率）。
 
@@ -730,7 +801,8 @@ class ResourceList(tk.Frame):
     def _on_destroy_shine(self, event=None) -> None:
         if event is not None and event.widget is not self:
             return
-        for attr in ("_shine_job", "_fly_job", "_configure_job", "_scroll_job"):
+        for attr in ("_shine_job", "_fly_job", "_configure_job", "_scroll_job",
+                     "_check_job", "_empty_job"):
             job = getattr(self, attr, None)
             if job is not None:
                 try:
@@ -927,6 +999,7 @@ class ResourceList(tk.Frame):
     def toggle_selected(self) -> None:
         for item in self.selected_items():
             item.checked = not item.checked
+            self._start_check_anim(item)
         self.redraw()
         self._on_change()
 
@@ -934,18 +1007,21 @@ class ResourceList(tk.Frame):
         targets = self.items if only_visible else self._source
         for item in targets:
             item.checked = True
+            self._start_check_anim(item)
         self.redraw()
         self._on_change()
 
     def select_none(self) -> None:
         for item in self._source:
             item.checked = False
+            self._start_check_anim(item)
         self.redraw()
         self._on_change()
 
     def set_checked(self, items, checked: bool = True) -> None:
         for item in items:
             item.checked = checked
+            self._start_check_anim(item)
         self.redraw()
         self._on_change()
 
@@ -1033,7 +1109,14 @@ class ResourceList(tk.Frame):
 
         if not self.items:
             self._draw_empty(width, height)
+            self._ensure_empty_tick()
             return
+        if self._empty_job is not None:
+            try:
+                self.after_cancel(self._empty_job)
+            except tk.TclError:
+                pass
+            self._empty_job = None
 
         gap = theme.px(int(theme.LAYOUT.get("card_gap", 0)))
         for index in range(first, last):
@@ -1159,23 +1242,30 @@ class ResourceList(tk.Frame):
         return photo
 
     def _draw_empty(self, width: int, height: int) -> None:
-        """空列表：居中图标 + 标题 + 说明。"""
+        """空列表：居中图标 + 标题 + 说明；图标会轻轻呼吸。"""
         canvas = self.canvas
         p = theme.px
         cx = width / 2
         cy = min(height / 2, p(210))
-        box = p(64)
-        top = cy - box / 2 - p(26)
+        # 呼吸：0..1 的正弦相位 → 盒子缩放 1.00~1.035、描边和图标颜色微微变亮
+        breath = 0.5 - 0.5 * math.cos(self._empty_phase * math.tau)
+        scale = 1.0 + 0.035 * breath if theme.ANIMATIONS else 1.0
+        box = p(64) * scale
+        top = cy - p(26) - box / 2
+        edge = (theme.blend(theme.ACCENT, theme.BORDER, 0.28 * breath)
+                if theme.ANIMATIONS else theme.BORDER)
+        icon_color = (theme.blend(theme.FG_DIM, theme.FG_FAINT, 0.45 * breath)
+                      if theme.ANIMATIONS else theme.FG_FAINT)
         round_rect(canvas, cx - box / 2, top, cx + box / 2, top + box,
-                   theme.card_radius(), fill=theme.CARD, outline=theme.BORDER)
+                   theme.card_radius(), fill=theme.CARD, outline=edge)
         # 放大镜
-        r = p(13)
-        canvas.create_oval(cx - r, top + box / 2 - r - p(2),
-                           cx + r, top + box / 2 + r - p(2),
-                           outline=theme.FG_FAINT, width=max(2, p(2)))
-        canvas.create_line(cx + r * 0.7, top + box / 2 + r * 0.7 - p(2),
-                           cx + r * 1.5, top + box / 2 + r * 1.5 - p(2),
-                           fill=theme.FG_FAINT, width=max(2, p(2)),
+        r = p(13) * scale
+        mid = top + box / 2
+        canvas.create_oval(cx - r, mid - r, cx + r, mid + r,
+                           outline=icon_color, width=max(2, p(2)))
+        canvas.create_line(cx + r * 0.7, mid + r * 0.7,
+                           cx + r * 1.5, mid + r * 1.5,
+                           fill=icon_color, width=max(2, p(2)),
                            capstyle="round")
         lines = (self.empty_hint or "").split("\n")
         title = lines[0] if lines else ""
@@ -1275,19 +1365,38 @@ class ResourceList(tk.Frame):
                                y + h - p(14), fill=theme.ACCENT,
                                width=max(2, p(3)), capstyle="round")
 
-        # ---- 复选框
+        # ---- 复选框（勾选时弹一下，勾线逐段长出来）
         cb_s = p(18)
         cb_x, cb_y = x1 + p(18), y + h / 2 - cb_s / 2
-        if checked:
-            round_rect(canvas, cb_x, cb_y, cb_x + cb_s, cb_y + cb_s,
-                       theme.small_radius(), fill=theme.ACCENT, outline="")
-            canvas.create_line(cb_x + cb_s * 0.26, cb_y + cb_s * 0.53,
-                               cb_x + cb_s * 0.44, cb_y + cb_s * 0.71,
-                               cb_x + cb_s * 0.74, cb_y + cb_s * 0.32,
-                               fill="#ffffff", width=max(2, p(2)),
-                               capstyle="round", joinstyle="round")
+        prog = self._check_progress(item)
+        if prog is None:
+            pop, grow = 1.0, 1.0
         else:
-            round_rect(canvas, cb_x, cb_y, cb_x + cb_s, cb_y + cb_s,
+            pop = 1.0 + 0.18 * math.sin(math.pi * min(1.0, prog))
+            grow = min(1.0, prog / 0.75)
+        size = cb_s * pop
+        bx = cb_x + (cb_s - size) / 2
+        by = cb_y + (cb_s - size) / 2
+        if checked:
+            round_rect(canvas, bx, by, bx + size, by + size,
+                       theme.small_radius(), fill=theme.ACCENT, outline="")
+            if grow > 0:
+                ax, ay = bx + size * 0.26, by + size * 0.53
+                mx, my = bx + size * 0.44, by + size * 0.71
+                cx2, cy2 = bx + size * 0.74, by + size * 0.32
+                if grow < 0.5:
+                    k = grow / 0.5
+                    pts = (ax, ay, ax + (mx - ax) * k, ay + (my - ay) * k)
+                elif grow < 1.0:
+                    k = (grow - 0.5) / 0.5
+                    pts = (ax, ay, mx, my, mx + (cx2 - mx) * k,
+                           my + (cy2 - my) * k)
+                else:
+                    pts = (ax, ay, mx, my, cx2, cy2)
+                canvas.create_line(*pts, fill="#ffffff", width=max(2, p(2)),
+                                   capstyle="round", joinstyle="round")
+        else:
+            round_rect(canvas, bx, by, bx + size, by + size,
                        theme.small_radius(), fill=theme.CARD if theme.CLASSIC else "",
                        outline=theme.BORDER_LIGHT,
                        width=max(1.0, p(1.5)))
@@ -1580,6 +1689,7 @@ class ResourceList(tk.Frame):
                 self._selected = {index}
         # 点击复选框区域或直接点击整行时都切换勾选（更符合直觉）
         item.checked = not item.checked
+        self._start_check_anim(item)
         self.redraw()
         self._on_change()
 
@@ -2023,15 +2133,72 @@ class SideTabs(tk.Canvas):
         self._hover: Optional[str] = None
         self._font = tkfont.Font(font=theme.FONT_SMALL)
         self._font_active = tkfont.Font(font=(theme.FONT_FAMILY, 10, "bold"))
+        # 选中高亮在行间滑动（切换分类时不是直接跳过去）
+        self._slide_from_top: Optional[float] = None
+        self._slide_to_top: Optional[float] = None
+        self._slide_t = 1.0
+        self._slide_job = None
         self.bind("<Button-1>", self._on_click)
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", self._on_leave)
+        self.bind("<Destroy>", self._on_destroy, add="+")
         self._refresh()
 
     def select(self, key: str) -> None:
+        old_top = self._row_top(self._current)
+        new_top = self._row_top(key)
         self._current = key
+        self._slide_t = 1.0
+        if (theme.ANIMATIONS and old_top is not None and new_top is not None
+                and abs(old_top - new_top) > 0.5):
+            self._slide_from_top = old_top
+            self._slide_to_top = new_top
+            self._slide_t = 0.0
+            self._start_slide()
         self._refresh()
         self._command(key)
+
+    def _row_top(self, key: str) -> Optional[float]:
+        for index, (name, _label) in enumerate(self._segments):
+            if name == key:
+                return 4.0 + index * self._row_h
+        return None
+
+    def _start_slide(self) -> None:
+        if self._slide_job is not None:
+            try:
+                self.after_cancel(self._slide_job)
+            except tk.TclError:
+                pass
+            self._slide_job = None
+
+        def step() -> None:
+            self._slide_job = None
+            if self._slide_t >= 1.0:
+                self._refresh()
+                return
+            delay = theme.frame_delay()
+            self._slide_t = min(1.0, self._slide_t + delay / 220.0)
+            self._refresh()
+            try:
+                self._slide_job = self.after(delay, step)
+            except tk.TclError:
+                self._slide_job = None
+
+        try:
+            self._slide_job = self.after(theme.frame_delay(), step)
+        except tk.TclError:
+            self._slide_job = None
+
+    def _on_destroy(self, event=None) -> None:
+        if event is not None and event.widget is not self:
+            return
+        if self._slide_job is not None:
+            try:
+                self.after_cancel(self._slide_job)
+            except tk.TclError:
+                pass
+            self._slide_job = None
 
     def set_counts(self, counts: dict) -> None:
         self._counts = dict(counts)
@@ -2055,24 +2222,37 @@ class SideTabs(tk.Canvas):
         self.delete("all")
         p = theme.px
         width = int(self.cget("width"))
+        # 1) 非选中行的悬停底色
         for index, (key, _label) in enumerate(self._segments):
+            if key == self._current or key != self._hover:
+                continue
             top = 4 + index * self._row_h
+            round_rect(self, p(4), top + p(3), width - p(4),
+                       top + self._row_h - p(3), theme.px(12),
+                       fill=theme.ROW_HOVER, outline="")
+        # 2) 选中高亮：切换时从上一行滑到这一行
+        base_top = self._row_top(self._current)
+        if base_top is not None:
+            top = base_top
+            if (self._slide_t < 1.0 and self._slide_from_top is not None
+                    and self._slide_to_top is not None):
+                t = max(0.0, min(1.0, self._slide_t))
+                eased = 1 - (1 - t) ** 3
+                top = self._slide_from_top + (self._slide_to_top
+                                              - self._slide_from_top) * eased
+            round_rect(self, p(4), top + p(3), width - p(4),
+                       top + self._row_h - p(3), theme.px(12),
+                       fill=theme.blend(theme.ACCENT, theme.PANEL, 0.24),
+                       outline=theme.blend(theme.ACCENT, theme.PANEL, 0.55),
+                       width=1)
+            self.create_line(p(5), top + p(12), p(5),
+                             top + self._row_h - p(12),
+                             fill=theme.ACCENT, width=max(2, p(3)),
+                             capstyle="round")
+        # 3) 文字与计数
+        for index, key in enumerate(k for k, _l in self._segments):
             active = key == self._current
-            hover = key == self._hover
-            if active:
-                round_rect(self, p(4), top + p(3), width - p(4),
-                           top + self._row_h - p(3), theme.px(12),
-                           fill=theme.blend(theme.ACCENT, theme.PANEL, 0.24),
-                           outline=theme.blend(theme.ACCENT, theme.PANEL, 0.55),
-                           width=1)
-                self.create_line(p(5), top + p(12), p(5),
-                                 top + self._row_h - p(12),
-                                 fill=theme.ACCENT, width=max(2, p(3)),
-                                 capstyle="round")
-            elif hover:
-                round_rect(self, p(4), top + p(3), width - p(4),
-                           top + self._row_h - p(3), theme.px(12),
-                           fill=theme.ROW_HOVER, outline="")
+            top = 4 + index * self._row_h
             color = theme.FG if active else theme.FG_DIM
             font = self._font_active if active else self._font
             self.create_text(p(18), top + self._row_h / 2,

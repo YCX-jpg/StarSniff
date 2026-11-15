@@ -44,6 +44,166 @@ def _ease_out(t: float) -> float:
     return 1.0 - (1.0 - t) ** 3
 
 
+def _set_option(widget, option: str, value) -> None:
+    try:
+        widget.configure(**{option: value})
+    except tk.TclError:
+        pass
+
+
+def _set_text(widget, text: str) -> None:
+    try:
+        widget.configure(text=text)
+    except tk.TclError:
+        pass
+
+
+def fade_swap(window, action, out_duration: int = 110,
+              in_duration: int = 180, low_ratio: float = 0.45) -> None:
+    """淡出 → 执行 action（重建控件）→ 淡入，用于切换主题。
+
+    换肤时控件是整体重建的，直接换会「啪」地跳一下；这里让窗口先暗下去，
+    重建完成后再亮回来，视觉上像一次干净的切换。
+    """
+    if not theme.ANIMATIONS or not _alive(window):
+        action()
+        return
+    target = getattr(window, "_motion_alpha", None)
+    if not target:
+        target = _current_alpha(window) or 1.0
+    if target <= 0.05:
+        target = 1.0
+    try:
+        window._motion_alpha = target
+    except tk.TclError:
+        pass
+    start = _current_alpha(window)
+    low = max(0.05, target * max(0.05, min(0.95, low_ratio)))
+    out_steps = max(2, int(out_duration / max(10, _delay())))
+    in_steps = max(3, int(in_duration / max(10, _delay())))
+
+    def fade_in(i: int = 0) -> None:
+        if not _alive(window):
+            return
+        t = min(1.0, i / in_steps)
+        _alpha(window, low + (target - low) * _ease_out(t))
+        if i >= in_steps:
+            _alpha(window, target)
+            return
+        try:
+            window.after(_delay(), lambda: fade_in(i + 1))
+        except tk.TclError:
+            _alpha(window, target)
+
+    def fade_out(i: int = 0) -> None:
+        if not _alive(window):
+            return
+        t = min(1.0, i / out_steps)
+        _alpha(window, start + (low - start) * _ease_out(t))
+        if i >= out_steps:
+            try:
+                action()
+            except Exception:  # noqa: BLE001 - 重建失败也要把窗口亮回来
+                pass
+            fade_in(0)
+            return
+        try:
+            window.after(_delay(), lambda: fade_out(i + 1))
+        except tk.TclError:
+            action()
+            fade_in(0)
+
+    fade_out(0)
+
+
+_TWEEN_JOBS: dict[str, str] = {}
+
+
+def _cancel_tween(widget, key: str) -> None:
+    job = _TWEEN_JOBS.pop(key, None)
+    if job is not None:
+        try:
+            widget.after_cancel(job)
+        except tk.TclError:
+            pass
+
+
+def tween_color(widget, option: str, end: str, duration: int = 140) -> None:
+    """把控件某个颜色选项从当前值平滑过渡到 ``end``（清空/选择输入框等）。"""
+    try:
+        start = str(widget.cget(option))
+    except tk.TclError:
+        return
+    key = f"{id(widget)}:{option}"
+    _cancel_tween(widget, key)
+    if not theme.ANIMATIONS or not start or start == end:
+        _set_option(widget, option, end)
+        return
+    steps = max(3, int(duration / max(10, _delay())))
+
+    def frame(i: int = 0) -> None:
+        _TWEEN_JOBS.pop(key, None)
+        t = min(1.0, i / steps)
+        # theme.blend(a, b, w)：w=0 是 b，w=1 是 a，正好从 start 走到 end
+        _set_option(widget, option, theme.blend(end, start, _ease_out(t)))
+        if i >= steps:
+            _set_option(widget, option, end)
+            return
+        try:
+            _TWEEN_JOBS[key] = widget.after(_delay(), lambda: frame(i + 1))
+        except tk.TclError:
+            _TWEEN_JOBS.pop(key, None)
+
+    frame(0)
+
+
+def tween_numbers(label, targets: dict, render, duration: int = 280) -> None:
+    """让 label 上的几个数字一起滚动到目标值（只用于纯数字计数）。"""
+    end = {key: int(value) for key, value in targets.items()}
+    state = getattr(label, "_tween_state", None) or {}
+    start = {key: int(state.get(key, value)) for key, value in end.items()}
+    job = getattr(label, "_tween_job", None)
+    if job is not None:
+        try:
+            label.after_cancel(job)
+        except tk.TclError:
+            pass
+        label._tween_job = None
+    if not theme.ANIMATIONS or start == end:
+        label._tween_state = dict(end)
+        try:
+            label.configure(text=render(end))
+        except tk.TclError:
+            pass
+        return
+    steps = max(4, int(duration / max(10, _delay())))
+
+    def frame(i: int = 0) -> None:
+        label._tween_job = None
+        t = min(1.0, i / steps)
+        eased = _ease_out(t)
+        values = {key: int(round(start[key] + (end[key] - start[key]) * eased))
+                  for key in end}
+        label._tween_state = dict(values)
+        try:
+            label.configure(text=render(values))
+        except tk.TclError:
+            return
+        if i >= steps:
+            label._tween_state = dict(end)
+            try:
+                label.configure(text=render(end))
+            except tk.TclError:
+                pass
+            return
+        try:
+            label._tween_job = label.after(_delay(), lambda: frame(i + 1))
+        except tk.TclError:
+            label._tween_job = None
+
+    frame(0)
+
+
 def _geometry_safe(window) -> bool:
     """最大化/全屏时不要动 geometry，否则会把窗口拽回普通大小。"""
     try:

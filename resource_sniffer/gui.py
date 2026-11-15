@@ -885,12 +885,20 @@ class MainWindow(tk.Tk):
         except tk.TclError:
             pass
 
+    def _set_search_focus(self, focused: bool) -> None:
+        border = getattr(self, "_search_border", None)
+        if border is None:
+            return
+        motion.tween_color(border, "highlightbackground",
+                           theme.ACCENT if focused else theme.BORDER, 130)
+
     def _set_url_focus(self, focused: bool) -> None:
         try:
             border = getattr(self, "_url_border", self.url_entry.master)
-            border.configure(highlightbackground=(
-                theme.ACCENT if focused else
-                theme.BORDER_LIGHT if theme.GLASS else theme.BORDER))
+            idle = theme.BORDER_LIGHT if theme.GLASS else theme.BORDER
+            # 边框颜色渐变过去，不要“啪”地跳成高亮蓝
+            motion.tween_color(border, "highlightbackground",
+                               theme.ACCENT if focused else idle, 130)
         except tk.TclError:
             pass
         self._draw_search_icon(theme.ACCENT if focused else theme.FG_FAINT)
@@ -946,6 +954,11 @@ class MainWindow(tk.Tk):
         entry.pack(side="left", padx=(theme.px(8), theme.px(6)),
                    ipady=theme.px(4))
         self.search_entry = entry
+        self._search_border = search
+        entry.bind("<FocusIn>", lambda _e: self._set_search_focus(True),
+                   add="+")
+        entry.bind("<FocusOut>", lambda _e: self._set_search_focus(False),
+                   add="+")
         tk.Label(search, text="搜索文件名/链接", bg=theme.CARD, fg=theme.FG_FAINT,
                  font=theme.FONT_TINY).pack(side="left", padx=(0, theme.px(8)))
 
@@ -1750,20 +1763,27 @@ class MainWindow(tk.Tk):
         self.tabs.set_counts(counts)
         checked = len(checked_items)
         total = len(items)
+        size = sum(i.size or 0 for i in checked_items if i.size) if checked else 0
+        size_note = fmt_size(size) if size else "大小未知"
         side_stats = getattr(self, "side_stats", None)
         if side_stats is not None:
             try:
-                side_stats.configure(text=f"共 {total} 项 · 已选 {checked}")
+                # 数字滚动到位，不要一个个跳
+                motion.tween_numbers(
+                    side_stats, {"total": total, "checked": checked},
+                    lambda v: f"共 {v['total']} 项 · 已选 {v['checked']}")
             except tk.TclError:
                 self.side_stats = None
         if checked:
-            size = sum(i.size or 0 for i in checked_items if i.size)
-            self.count_label.configure(
-                text=f"已选 {checked} 项 · {fmt_size(size) if size else '大小未知'}",
-                fg=theme.FG)
+            motion.tween_numbers(
+                self.count_label, {"checked": checked},
+                lambda v: f"已选 {v['checked']} 项 · {size_note}")
+            self.count_label.configure(fg=theme.FG)
         else:
-            self.count_label.configure(text=f"已选 0 项 / 共 {total} 项",
-                                       fg=theme.FG_FAINT)
+            motion.tween_numbers(
+                self.count_label, {"total": total},
+                lambda v: f"已选 0 项 / 共 {v['total']} 项")
+            self.count_label.configure(fg=theme.FG_FAINT)
 
     def _on_filter_change(self, kind: str) -> None:
         self._kind_filter = kind
@@ -2264,7 +2284,8 @@ class MainWindow(tk.Tk):
         self.sniffer.route = None
         self.downloader.segments = max(
             1, min(8, int(getattr(self.cfg, "download_segments", 4) or 1)))
-        self._rebuild_ui()
+        # 换肤时先淡出再重建，最后淡入；重建期间窗口不会“啪”地闪一下
+        motion.fade_swap(self, self._rebuild_ui)
         self._log("设置已应用")
 
     def _relaunch(self) -> None:
