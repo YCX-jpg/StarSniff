@@ -1326,10 +1326,12 @@ class SettingsDialog(tk.Toplevel):
                 cursor="hand2").pack(side="left", padx=(0, theme.px(8)))
 
         self.test_result = tk.Label(
-            page, text="提示：智能选择会在每次嗅探前同时测试直连和代理，"
-                       "只比较响应头延迟，通常不到 1 秒。",
+            page, text="提示：代理留空时会自动使用系统代理（Windows「Internet 选项」）"
+                       "或本地代理端口（Clash 7890 / v2rayN 10809 等）；"
+                       "智能选择会在每次嗅探前同时测试直连和代理，只比较响应头延迟，"
+                       "通常不到 1 秒。",
             bg=theme.BG, fg=theme.FG_FAINT, font=theme.FONT_TINY,
-            anchor="w", justify="left", wraplength=theme.px(440))
+            anchor="w", justify="left", wraplength=theme.px(470))
         self.test_result.pack(fill="x", pady=(theme.px(2), theme.px(6)))
 
         row = tk.Frame(page, bg=theme.BG)

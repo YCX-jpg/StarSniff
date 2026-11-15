@@ -647,6 +647,21 @@ def test_units() -> None:
           and not updater.is_newer("2.0.0", "2.0.0")
           and not updater.is_newer("1.9.9", "2.0.0"),
           "2.1.0 > 2.0.9")
+    check("rc 版本能正确排序（rc2 < rc3 < 正式版）",
+          updater.is_newer("3.1.1-rc3", "3.1.1-rc2")
+          and not updater.is_newer("3.1.1-rc2", "3.1.1-rc3")
+          and not updater.is_newer("3.1.1-rc9", "3.1.1")
+          and updater.is_newer("3.1.1", "3.1.1-rc3")
+          and updater.is_newer("3.1.2-rc1", "3.1.1")
+          and not updater.is_newer("3.1.2-rc1", "3.1.2-rc10"),
+          f"{updater.version_key('3.1.1-rc2')} < "
+          f"{updater.version_key('3.1.1-rc3')} < "
+          f"{updater.version_key('3.1.1')}")
+    check("预发布后缀识别 snapshot / beta",
+          updater.is_newer("3.1.2-beta2", "3.1.2-beta1")
+          and updater.is_newer("3.1.2-rc1", "3.1.2-snapshot1")
+          and not updater.is_newer("3.1.2-snapshot9", "3.1.2-rc1"),
+          "beta < rc")
     asset_exe = updater.ReleaseAsset("StarSniff-2.1.0.exe",
                                      "https://example.com/a.exe")
     asset_zip = updater.ReleaseAsset("StarSniff-2.1.0.zip",
@@ -659,8 +674,11 @@ def test_units() -> None:
 
     real_read_json = updater._read_json
     real_fallback = updater._latest_tag_from_redirect
+    real_proxies = updater._proxy_candidates
     try:
-        updater._read_json = lambda url, timeout: {
+        # 测试里不扫本地代理端口，保持确定性
+        updater._proxy_candidates = lambda: []
+        updater._read_json = lambda url, timeout, proxy="": {
             "tag_name": "v2.1.0", "name": "StarSniff 2.1.0",
             "body": "测试更新说明", "html_url": "https://example.com/rel",
             "published_at": "2026-01-01T00:00:00Z",
@@ -674,11 +692,11 @@ def test_units() -> None:
               and fetched.assets[0].name.endswith(".zip"),
               f"{fetched.version} / {len(fetched.assets)} assets")
 
-        def _rate_limited(url, timeout):
+        def _rate_limited(url, timeout, proxy=""):
             raise updater.UpdateError("限流", "rate_limit")
 
         updater._read_json = _rate_limited
-        updater._latest_tag_from_redirect = lambda timeout: "v2.2.0"
+        updater._latest_tag_from_redirect = lambda timeout, proxy="": "v2.2.0"
         fallback = updater.check_latest()
         check("API 限流时退回 releases/latest 跳转",
               fallback.version == "2.2.0" and "限流" in fallback.notes,
@@ -686,6 +704,7 @@ def test_units() -> None:
     finally:
         updater._read_json = real_read_json
         updater._latest_tag_from_redirect = real_fallback
+        updater._proxy_candidates = real_proxies
 
     # yt-dlp 条目解析（不需要真的安装 yt-dlp）
     from resource_sniffer import ytdlp
@@ -927,11 +946,29 @@ def test_smart_proxy() -> None:
     check("强制代理：直接选中代理",
           route.used_proxy and route.proxy == "127.0.0.1:1")
 
-    route = smartproxy.choose(f"{BASE}/page.html", mode="auto", proxy="",
-                              timeout=1)
-    check("未配置代理时直接直连",
-          not route.used_proxy and not route.tested and "未配置" in route.reason,
-          route.reason)
+    # 没配代理、系统也没有代理：直连
+    real_system_proxy = smartproxy.system_proxy
+    try:
+        smartproxy.system_proxy = lambda url: ""
+        route = smartproxy.choose(f"{BASE}/page.html", mode="auto", proxy="",
+                                  timeout=1)
+        check("未配置代理时直接直连",
+              not route.used_proxy and not route.tested
+              and "未配置" in route.reason,
+              route.reason)
+    finally:
+        smartproxy.system_proxy = real_system_proxy
+
+    # 本地开着 VPN / Clash：不填代理也要自动发现系统代理
+    try:
+        smartproxy.system_proxy = lambda url: "127.0.0.1:1"
+        route = smartproxy.choose(f"{BASE}/page.html", mode="auto", proxy="",
+                                  timeout=1.5)
+        check("自动发现系统代理（本地 VPN / Clash）",
+              route.tested and not route.used_proxy and bool(route.proxy_error),
+              route.reason)
+    finally:
+        smartproxy.system_proxy = real_system_proxy
 
     # 代理端口没人监听：自动落到直连，并保留代理错误原因
     route = smartproxy.choose(f"{BASE}/page.html", mode="auto",

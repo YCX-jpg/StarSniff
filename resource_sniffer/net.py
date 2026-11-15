@@ -166,13 +166,146 @@ def _resolve_proxy(url: str) -> str:
     return ""
 
 
+# 本地代理/VPN 常开的端口：Clash（7890/7897）、v2rayN（10809 HTTP）、
+# V2Ray/Xray（1080/8118）、Fiddler/Charles（8888）、自定义（8080、20171…）
+LOCAL_PROXY_PORTS = (7890, 7897, 7891, 10809, 10808, 1080, 8118, 8080,
+                     8889, 8888, 20171, 2080, 12333)
+
+_LOCAL_PROXY_CACHE: tuple[float, list[str]] = (0.0, [])
+_LOCAL_PROXY_TTL = 60.0          # 探测结果缓存 60 秒，避免每次请求都扫端口
+
+
+def _normalize_proxy(value: str) -> str:
+    """把 ``127.0.0.1:7890`` 补成 ``http://127.0.0.1:7890``。"""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return value if "://" in value else "http://" + value
+
+
+def windows_system_proxy() -> str:
+    """读 Windows「Internet 选项」里的系统代理（Clash 等会写这里）。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+
+        path = (r"Software\Microsoft\Windows\CurrentVersion"
+                r"\Internet Settings")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            try:
+                enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            except OSError:
+                enabled = 0
+            if not enabled:
+                return ""
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+    except (OSError, ImportError, ValueError):
+        return ""
+    server = str(server or "").strip()
+    if not server:
+        return ""
+    if "=" in server:                       # http=127.0.0.1:7890;https=...
+        chosen = ""
+        for part in server.split(";"):
+            if "=" not in part:
+                continue
+            scheme, value = part.split("=", 1)
+            scheme = scheme.strip().lower()
+            if scheme in ("https", "http"):
+                chosen = value.strip()
+                if scheme == "https":
+                    break
+        server = chosen
+        if not server:
+            return ""
+    if "://" not in server:
+        server = "http://" + server
+    # 形如 http://127.0.0.1:7890 才可用；排除 SOCKS 之外的怪格式
+    if not server.split("://", 1)[1].strip():
+        return ""
+    return server
+
+
+def _proxy_works(proxy: str, host: str = "api.github.com",
+                 port: int = 443, timeout: float = 0.5) -> bool:
+    """发一个 CONNECT 握手，确认这个端口确实是可用的 HTTP 代理。"""
+    parsed = urlsplit(proxy)
+    host_name = parsed.hostname or ""
+    port_num = parsed.port or 8080
+    try:
+        sock = socket.create_connection((host_name, port_num), timeout=timeout)
+    except OSError:
+        return False
+    try:
+        request = (f"CONNECT {host}:{port} HTTP/1.1\r\n"
+                   f"Host: {host}:{port}\r\nProxy-Connection: keep-alive\r\n\r\n")
+        sock.sendall(request.encode("latin-1"))
+        head = sock.recv(64)
+        return b" 200" in head
+    except OSError:
+        return False
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def local_proxy_candidates() -> list[str]:
+    """扫本地常见代理端口，返回真正能用的 HTTP 代理（缓存 60 秒）。"""
+    global _LOCAL_PROXY_CACHE
+    now = time.monotonic()
+    cached_at, cached = _LOCAL_PROXY_CACHE
+    if cached and now - cached_at < _LOCAL_PROXY_TTL:
+        return list(cached)
+    proxies = [f"http://127.0.0.1:{port}" for port in LOCAL_PROXY_PORTS]
+
+    def probe(proxy: str, out: dict) -> None:
+        if _proxy_works(proxy):
+            out[proxy] = True
+
+    found: dict[str, bool] = {}
+    threads = [threading.Thread(target=probe, args=(p, found), daemon=True)
+               for p in proxies]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 1.2
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    result = [p for p in proxies if found.get(p)]
+    _LOCAL_PROXY_CACHE = (now, result)
+    return list(result)
+
+
+def proxy_candidates(url: str) -> list[str]:
+    """按优先级返回可用代理：环境变量 → Windows 系统代理 → 本地端口。"""
+    candidates: list[str] = []
+
+    def add(value: str) -> None:
+        value = _normalize_proxy(value)
+        if value and value not in candidates:
+            candidates.append(value)
+
+    add(_resolve_proxy(url))
+    add(windows_system_proxy())
+    if not candidates:
+        for item in local_proxy_candidates():
+            add(item)
+    return candidates
+
+
 def system_proxy(url: str) -> str:
-    """返回系统环境变量里为 url 配置的代理（没有则空串）。
+    """返回当前可用的代理（没有则空串）。
+
+    依次看：``HTTP(S)_PROXY`` 环境变量 → Windows 系统代理 → 本地常见代理端口，
+    这样本地开着 Clash / v2rayN 之类、但没写环境变量时也能自动走代理。
 
     单独暴露成公开函数，给「智能代理」判断系统代理是否可用；设置页里
     留空代理时仍然沿用系统代理，不会破坏原有使用习惯。
     """
-    return _resolve_proxy(url)
+    candidates = proxy_candidates(url)
+    return candidates[0] if candidates else ""
 
 
 def _ssl_context() -> ssl.SSLContext:
