@@ -113,16 +113,27 @@ class MiniSlider(tk.Canvas):
         self._low = low
         self._high = high
         self._command = command
+        self._enabled = True
         self.bind("<Configure>", lambda _e: self._draw())
         self.bind("<Button-1>", self._on_drag)
         self.bind("<B1-Motion>", self._on_drag)
         variable.trace_add("write", lambda *_: self._draw())
+
+    def set_enabled(self, value: bool) -> None:
+        self._enabled = bool(value)
+        try:
+            self.configure(cursor="hand2" if self._enabled else "arrow")
+        except tk.TclError:
+            pass
+        self._draw()
 
     def _fraction(self) -> float:
         span = max(1, self._high - self._low)
         return max(0.0, min(1.0, (self._var.get() - self._low) / span))
 
     def _on_drag(self, event) -> None:
+        if not self._enabled:
+            return
         pad = theme.px(9)
         usable = max(1, self.winfo_width() - pad * 2)
         fraction = max(0.0, min(1.0, (event.x - pad) / usable))
@@ -146,10 +157,13 @@ class MiniSlider(tk.Canvas):
         x = pad + (width - pad * 2) * self._fraction()
         if x > pad + 1:
             round_rect(self, pad, cy - track / 2, x, cy + track / 2,
-                       track / 2, fill=theme.ACCENT, outline="")
+                       track / 2, fill=theme.ACCENT if self._enabled
+                       else theme.BORDER, outline="")
         r = p(6)
-        self.create_oval(x - r, cy - r, x + r, cy + r, fill=theme.FG,
-                         outline=theme.ACCENT, width=max(1, p(2)))
+        self.create_oval(x - r, cy - r, x + r, cy + r,
+                         fill=theme.FG if self._enabled else theme.FG_FAINT,
+                         outline=theme.ACCENT if self._enabled else theme.BORDER,
+                         width=max(1, p(2)))
 
 
 class _Swatch(tk.Canvas):
@@ -198,6 +212,7 @@ class ToggleSwitch(tk.Canvas):
         self._pos = 1.0 if bool(variable.get()) else 0.0
         self._job = None
         self._hover = False
+        self._enabled = True
         self.bind("<Button-1>", lambda _e: self.invoke())
         self.bind("<Enter>", lambda _e: self._set_hover(True))
         self.bind("<Leave>", lambda _e: self._set_hover(False))
@@ -206,12 +221,24 @@ class ToggleSwitch(tk.Canvas):
 
     # -- 交互 ----------------------------------------------------------
     def invoke(self) -> None:
+        if not self._enabled:
+            return
         try:
             self._var.set(not bool(self._var.get()))
         except tk.TclError:
             return
         if self._command is not None:
             self._command()
+
+    def set_enabled(self, value: bool) -> None:
+        """禁用时不响应点击（性能主题固定浅色，深色开关要灰掉）。"""
+        self._enabled = bool(value)
+        self._hover = False
+        try:
+            self.configure(cursor="hand2" if self._enabled else "arrow")
+        except tk.TclError:
+            pass
+        self._draw()
 
     def _set_hover(self, value: bool) -> None:
         self._hover = value
@@ -261,7 +288,9 @@ class ToggleSwitch(tk.Canvas):
         w, h = self._tw, self._th
         pad = max(1, theme.px(1))
         on = bool(self._var.get())
-        if on:
+        if not self._enabled:
+            track = theme.SEGMENT_BG
+        elif on:
             track = theme.ACCENT_HOVER if self._hover else theme.ACCENT
         else:
             track = theme.BORDER_LIGHT if self._hover else theme.BORDER
@@ -485,6 +514,11 @@ class UpdateDialog(tk.Toplevel):
         self.bind("<Escape>", lambda _e: self._close())
         self.update_idletasks()
         self._center_on(master)
+        try:
+            frameless.apply_window_radius(self, theme.window_radius(),
+                                          theme.BG, theme.BORDER)
+        except tk.TclError:
+            pass
         self.after(30, lambda: motion.open_window(self, dy=theme.px(10),
                                                   duration=160, target=1.0))
 
@@ -797,12 +831,20 @@ class SettingsDialog(tk.Toplevel):
             card.pack(side="left", padx=(0, theme.px(8)))
             self._cards[key] = card
 
-        # 深浅变体：每套主题都有明暗两版
+        # 深浅变体：每套主题都有明暗两版（性能主题例外，固定浅色）
         self.var_dark = tk.BooleanVar(
             value=bool(getattr(self.cfg, "theme_dark", False)))
-        self._toggle(page, "深色主题", self.var_dark,
-                     hint="关掉即为该主题的浅色版本，标题栏一起变",
-                     command=self._dark_changed)
+        self._dark_row = self._toggle(
+            page, "深色主题", self.var_dark,
+            hint="关掉即为该主题的浅色版本，标题栏一起变",
+            command=self._dark_changed)
+        self._dark_switch = getattr(self._dark_row, "_switch", None)
+        # 性能主题固定浅色 + 直角，这里给一句说明，开关和滑杆同时灰掉
+        self._perf_note = tk.Label(
+            page, text="性能主题使用系统原生窗口，固定浅色、直角，"
+                       "深色与圆角设置对它不生效。",
+            bg=theme.BG, fg=theme.FG_FAINT, font=theme.FONT_TINY,
+            anchor="w", justify="left", wraplength=theme.px(430))
 
         self.var_auto_ytdlp = tk.BooleanVar(
             value=bool(getattr(self.cfg, "auto_update_ytdlp", True)))
@@ -829,8 +871,11 @@ class SettingsDialog(tk.Toplevel):
         follow.bind("<Button-1>", lambda _e: self._choose_accent(""))
 
         self._heading(page, "圆角与动画")
-        self._radius_row(page, "按钮圆角", self.var_radius_button, 0, 28)
-        self._radius_row(page, "窗口圆角", self.var_radius_window, 0, 30)
+        self._radius_controls = []
+        self._radius_controls.append(
+            self._radius_row(page, "按钮圆角", self.var_radius_button, 0, 28))
+        self._radius_controls.append(
+            self._radius_row(page, "窗口圆角", self.var_radius_window, 0, 30))
 
         self._toggle(page, "启用悬停 / 主题切换动画", self.var_animations,
                      hint="关闭后切换更快，也不占用显卡",
@@ -864,11 +909,12 @@ class SettingsDialog(tk.Toplevel):
         self._refresh_appearance()
 
     def _radius_row(self, parent, label: str, var: tk.IntVar,
-                    low: int, high: int) -> None:
+                    low: int, high: int):
         row = tk.Frame(parent, bg=theme.BG)
         row.pack(fill="x", pady=theme.px(3))
-        tk.Label(row, text=label, bg=theme.BG, fg=theme.FG_DIM, width=8,
-                 anchor="w", font=theme.FONT_SMALL).pack(side="left")
+        text = tk.Label(row, text=label, bg=theme.BG, fg=theme.FG_DIM, width=8,
+                        anchor="w", font=theme.FONT_SMALL)
+        text.pack(side="left")
         value = tk.Label(row, text=str(var.get()), bg=theme.BG, fg=theme.FG,
                          width=3, font=theme.FONT_SMALL)
         value.pack(side="right")
@@ -877,6 +923,37 @@ class SettingsDialog(tk.Toplevel):
         slider.pack(side="left", padx=theme.px(10), fill="x", expand=True)
         var.trace_add("write", lambda *_: (value.configure(text=str(var.get())),
                                            self._schedule_preview()))
+        return (row, text, value, slider)
+
+    def _sync_preset_controls(self) -> None:
+        """性能主题：深色开关和圆角滑杆灰掉，值归零；其它主题恢复可编辑。"""
+        flat = self.var_preset.get() == "perf"
+        if flat:
+            if bool(self.var_dark.get()):
+                self.var_dark.set(False)
+            if self.var_radius_button.get() != 0:
+                self.var_radius_button.set(0)
+            if self.var_radius_window.get() != 0:
+                self.var_radius_window.set(0)
+        if self._dark_switch is not None:
+            self._dark_switch.set_enabled(not flat)
+        lock_fg = theme.FG_FAINT if flat else theme.FG_DIM
+        for row, text, value, slider in getattr(self, "_radius_controls", []):
+            slider.set_enabled(not flat)
+            try:
+                text.configure(fg=lock_fg)
+                value.configure(fg=lock_fg)
+            except tk.TclError:
+                pass
+        try:
+            if flat:
+                # 用 after= 插在「深色主题」那一行下面，不然会被排到页面最底部
+                self._perf_note.pack(fill="x", pady=(theme.px(4), 0),
+                                     after=self._dark_row)
+            else:
+                self._perf_note.pack_forget()
+        except (tk.TclError, AttributeError):
+            pass
 
     def _refresh_appearance(self) -> None:
         preset = self.var_preset.get()
@@ -887,6 +964,7 @@ class SettingsDialog(tk.Toplevel):
         accent = (self.var_accent.get() or data["accent"]).lower()
         for swatch in self._swatches:
             swatch.set_selected(swatch._color.lower() == accent)
+        self._sync_preset_controls()
 
     def _choose_preset(self, key: str) -> None:
         data = theme.PRESETS.get(key) or theme.PRESETS["acrylic"]
@@ -1536,6 +1614,7 @@ class SettingsDialog(tk.Toplevel):
         switch.pack(side="right", padx=(theme.px(12), 0), anchor="n")
         for widget in clickable:
             widget.bind("<Button-1>", lambda _e: switch.invoke(), add="+")
+        row._switch = switch
         return row
 
     def _check(self, parent, text: str, var: tk.BooleanVar,
@@ -1546,16 +1625,24 @@ class SettingsDialog(tk.Toplevel):
     def _apply(self) -> None:
         cfg = self.cfg
         cfg.theme_preset = self.var_preset.get()
-        cfg.theme_dark = bool(getattr(self, "var_dark", None)
-                              and self.var_dark.get())
+        if cfg.theme_preset == "perf":
+            # 性能主题固定浅色 + 直角，不保存深色/圆角（切回别的主题再恢复）
+            cfg.theme_dark = False
+            cfg.radius_button = 0
+            cfg.radius_window = 0
+        else:
+            cfg.theme_dark = bool(getattr(self, "var_dark", None)
+                                  and self.var_dark.get())
+            cfg.radius_button = max(0, min(28,
+                                           int(self.var_radius_button.get())))
+            cfg.radius_window = max(0, min(30,
+                                           int(self.var_radius_window.get())))
         cfg.auto_update_ytdlp = bool(getattr(self, "var_auto_ytdlp", None)
                                      and self.var_auto_ytdlp.get())
         cfg.auto_update_app = bool(getattr(self, "var_auto_app", None)
                                    and self.var_auto_app.get())
         cfg.check_updates = cfg.auto_update_app
         cfg.accent = self.var_accent.get()
-        cfg.radius_button = max(0, min(28, int(self.var_radius_button.get())))
-        cfg.radius_window = max(0, min(30, int(self.var_radius_window.get())))
         cfg.animations = bool(self.var_animations.get())
         try:
             cfg.anim_fps = max(5, min(120, int(self.var_anim_fps.get())))
@@ -1623,6 +1710,16 @@ class SettingsDialog(tk.Toplevel):
             self.lift()
             self.focus_force()
         except tk.TclError:
+            pass
+        self._apply_window_radius()
+
+    def _apply_window_radius(self) -> None:
+        """设置窗口也吃「窗口圆角」设置；性能主题是 0，保持直角。"""
+        try:
+            self.update_idletasks()
+            frameless.apply_window_radius(self, theme.window_radius(),
+                                          theme.BG, theme.BORDER)
+        except (tk.TclError, AttributeError):
             pass
 
     def _close(self) -> None:

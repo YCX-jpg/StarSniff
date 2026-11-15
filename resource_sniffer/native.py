@@ -40,6 +40,10 @@ class NativeWindow(tk.Tk):
         self.cfg = cfgmod.load(self.base_dir)
         self.download_dir = (self.cfg.download_dir
                              or cfgmod.default_download_dir(self.base_dir))
+        # 性能主题：固定浅色 + 直角，设置窗口也用这套（否则它会退回亚克力配色）
+        theme.apply_style("perf", self.cfg.accent, 0, 0,
+                          animations=False, anim_fps=60, dark=False)
+        theme.apply_scale(self)
 
         self.title(f"StarSniff 星嗅 {__version__}")
         self.geometry(self.cfg.window_geometry or "1000x640")
@@ -286,7 +290,19 @@ class NativeWindow(tk.Tk):
     def _open_settings(self) -> None:
         from .prefs import SettingsDialog
 
-        SettingsDialog(self, self.cfg, self._apply_settings, self._save_config)
+        existing = getattr(self, "_settings_dialog", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
+        # 设置窗口读的是 theme 全局样式，这里确保是性能主题的浅色直角
+        theme.apply_style("perf", self.cfg.accent, 0, 0,
+                          animations=False, anim_fps=60, dark=False)
+        self._settings_dialog = SettingsDialog(
+            self, self.cfg, self._apply_settings, self._save_config)
 
     def _show_help(self) -> None:
         messagebox.showinfo(
@@ -299,6 +315,30 @@ class NativeWindow(tk.Tk):
     def _apply_settings(self, _cfg) -> None:
         self._save_config()
         self.downloader.segments = max(1, min(8, int(self.cfg.download_segments or 1)))
+        if self.cfg.theme_preset != "perf":
+            # 选回自绘主题后必须换成另一个窗口，问一下是否立刻重启
+            if messagebox.askyesno(
+                    "切换界面",
+                    "已选择其它主题，自绘界面需要重新启动才能生效。\n现在重启吗？"):
+                self._relaunch()
+
+    def _relaunch(self) -> None:
+        import subprocess
+        import sys
+
+        try:
+            cfgmod.save(self.cfg, self.base_dir)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable])
+            else:
+                subprocess.Popen([sys.executable, os.path.join(
+                    os.path.dirname(os.path.dirname(
+                        os.path.abspath(__file__))), "app.py")])
+        finally:
+            self.destroy()
 
     def _save_config(self) -> None:
         cfgmod.save(self.cfg, self.base_dir)

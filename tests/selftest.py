@@ -583,17 +583,30 @@ def test_units() -> None:
           theme_mod.CLASSIC and theme_mod.BG == "#d4d0c8"
           and theme_mod.RADIUS_BUTTON == 0,
           f"{theme_mod.BG} / r={theme_mod.RADIUS_BUTTON}")
-    theme_mod.apply_style("perf", "#f472b6", 18, 22, False)
-    check("主题色 / 按钮圆角 / 窗口圆角生效",
-          theme_mod.ACCENT == "#f472b6" and theme_mod.RADIUS_BUTTON == 18
-          and theme_mod.RADIUS_WINDOW == 22 and not theme_mod.ANIMATIONS,
-          f"{theme_mod.ACCENT} / {theme_mod.RADIUS_BUTTON} / "
-          f"{theme_mod.RADIUS_WINDOW}")
+    theme_mod.apply_style("perf", "#f472b6", 18, 22, True, 60, True)
+    check("性能主题固定浅色直角（忽略深色/圆角设置）",
+          theme_mod.ACCENT == "#f472b6"
+          and theme_mod.RADIUS_BUTTON == 0 and theme_mod.RADIUS_WINDOW == 0
+          and not theme_mod.DARK_UI and not theme_mod.ANIMATIONS,
+          f"{theme_mod.ACCENT} / r={theme_mod.RADIUS_BUTTON}"
+          f"/{theme_mod.RADIUS_WINDOW} / dark={theme_mod.DARK_UI}")
+    perf_dark = theme_mod.palette_for("perf", dark=True)["colors"]
+    check("性能主题没有深色变体",
+          not theme_mod.supports_dark("perf")
+          and perf_dark["BG"] == theme_mod.PRESETS["perf"]["colors"]["BG"]
+          and theme_mod.supports_dark("acrylic"),
+          f"perf BG={perf_dark['BG']}")
     check("性能主题使用标准布局且无动画",
           theme_mod.LAYOUT["shell"] == "standard"
           and theme_mod.LAYOUT["motion"] == "none"
           and theme_mod.LAYOUT["list"] == "rows",
           f"{theme_mod.LAYOUT['shell']} / {theme_mod.LAYOUT['motion']}")
+    theme_mod.apply_style("acrylic", "#f472b6", 18, 22, False)
+    check("主题色 / 按钮圆角 / 窗口圆角生效",
+          theme_mod.ACCENT == "#f472b6" and theme_mod.RADIUS_BUTTON == 18
+          and theme_mod.RADIUS_WINDOW == 22 and not theme_mod.ANIMATIONS,
+          f"{theme_mod.ACCENT} / {theme_mod.RADIUS_BUTTON} / "
+          f"{theme_mod.RADIUS_WINDOW}")
     theme_mod.apply_style("acrylic", "", None, None, True)
     check("亚克力使用左侧导航布局",
           theme_mod.LAYOUT["shell"] == "sidebar"

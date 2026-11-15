@@ -381,66 +381,112 @@ def add_window_border(window) -> list[tk.Frame]:
     return frames
 
 
-# 用于扣掉窗口四角颜色的透明键（不会出现在任何主题配色里）
-CORNER_KEY = "#ff00fe"
+def _set_window_region(window, radius: int) -> None:
+    """用 SetWindowRgn 把窗口裁成圆角矩形；radius=0 时恢复直角。
 
-
-def clear_window_radius(window) -> None:
-    for canvas in list(getattr(window, "_corner_canvases", [])):
-        try:
-            canvas.destroy()
-        except tk.TclError:
-            pass
-    window._corner_canvases = []
+    以前的做法是四角各放一个 Canvas + ``-transparentcolor`` 色键，
+    但它只在「不透明窗口」上有效：亚克力主题开了 DWM 模糊、窗口又带
+    ``-alpha``，色键会被 DWM 忽略，结果只有个别角看起来是圆的。
+    直接裁窗口区域由系统负责裁剪，四个角一定一致，也不受模糊/半透明影响。
+    """
+    if os.name != "nt":
+        return
     try:
-        window.attributes("-transparentcolor", "")
-    except tk.TclError:
+        import ctypes
+
+        hwnd = _hwnd(window)
+        if not hwnd:
+            return
+        user32 = ctypes.windll.user32
+        if radius <= 0:
+            user32.SetWindowRgn(hwnd, None, True)
+            return
+        width = int(window.winfo_width())
+        height = int(window.winfo_height())
+        if width < 2 or height < 2:
+            # 窗口刚建好时 Tk 还没把尺寸同步给系统，等下一次 <Configure> 再裁
+            window.update_idletasks()
+            width, height = int(window.winfo_width()), int(window.winfo_height())
+            if width < 2 or height < 2:
+                return
+        r = max(2, int(radius))
+        window._radius_size = (width, height)
+        rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
+            0, 0, width + 1, height + 1, r * 2, r * 2)
+        if rgn:
+            # 区域交给系统托管，成功后不能再 DeleteObject
+            user32.SetWindowRgn(hwnd, rgn, True)
+    except Exception:  # noqa: BLE001
         pass
 
 
-def apply_window_radius(window, radius: int, bg: str, border: str) -> None:
-    """用透明色键把窗口四角切成圆角（仅 Windows）。
+def _flush_window_region(window) -> None:
+    job = getattr(window, "_region_job", None)
+    if job is not None:
+        try:
+            window.after_cancel(job)
+        except tk.TclError:
+            pass
+        window._region_job = None
+    spec = getattr(window, "_radius_spec", None)
+    if spec is not None:
+        _set_window_region(window, spec[0])
 
-    半径 0 时恢复直角。四角各放一个半径大小的 Canvas：
-    画布底色用透明键，只有圆角内部的四分之一圆用窗口底色填充，
-    于是圆角外的像素变透明，视觉上就是圆角窗口。
+
+def _on_window_configure(window, _event=None) -> None:
+    """窗口尺寸变了要重新裁一次，否则区域会停在上一个尺寸。
+
+    只比较尺寸：拖动窗口（位置变化）也会触发 <Configure>，那种情况不必重裁，
+    否则拖动时每帧都调 SetWindowRgn，画面会抖。
+    """
+    spec = getattr(window, "_radius_spec", None)
+    if not spec or spec[0] <= 0:
+        return
+    try:
+        size = (int(window.winfo_width()), int(window.winfo_height()))
+    except tk.TclError:
+        return
+    if size == getattr(window, "_radius_size", None):
+        return
+    # 同步重裁：SetWindowRgn 会再触发一次 <Configure>，但尺寸没变，
+    # 上面的比较会直接返回，不会形成递归。
+    _flush_window_region(window)
+
+
+def clear_window_radius(window) -> None:
+    window._radius_spec = None
+    job = getattr(window, "_region_job", None)
+    if job is not None:
+        try:
+            window.after_cancel(job)
+        except tk.TclError:
+            pass
+        window._region_job = None
+    _set_window_region(window, 0)
+
+
+def apply_window_radius(window, radius: int, bg: str = "", border: str = "") -> None:
+    """把无边框窗口裁成圆角（仅 Windows），半径 0 时恢复直角。
+
+    用 ``CreateRoundRectRgn`` + ``SetWindowRgn`` 由系统裁剪，
+    亚克力模糊、``-alpha`` 淡入淡出都不会让它失效，四角完全一致。
     """
     clear_window_radius(window)
-    if radius <= 0 or os.name != "nt":
+    if os.name != "nt":
         return
-    try:
-        window.attributes("-transparentcolor", CORNER_KEY)
-    except tk.TclError:
+    r = max(0, int(radius))
+    window._radius_spec = (r, bg, border)
+    if r <= 0:
+        _set_window_region(window, 0)
         return
-    r = max(2, int(radius))
-    specs = (
-        (0, 0, (0, 0, 2 * r, 2 * r), 90),          # 左上
-        (1, 0, (-r, 0, r, 2 * r), 0),              # 右上
-        (0, 1, (0, -r, 2 * r, r), 180),            # 左下
-        (1, 1, (-r, -r, r, r), 270),               # 右下
-    )
-    canvases = []
-    try:
-        for rel_x, rel_y, bbox, start in specs:
-            canvas = tk.Canvas(window, width=r, height=r, bg=CORNER_KEY,
-                               highlightthickness=0, bd=0, takefocus=0)
-            options = {"relx": rel_x, "rely": rel_y, "anchor": "nw"}
-            if rel_x:
-                options["x"] = -r
-            if rel_y:
-                options["y"] = -r
-            canvas.place(**options)
-            canvas.create_arc(*bbox, start=start, extent=90, style="pieslice",
-                              fill=bg, outline="")
-            canvas.create_arc(*bbox, start=start, extent=90, style="arc",
-                              outline=border, width=1)
-            canvas.lift()
-            canvases.append(canvas)
-    except tk.TclError:
-        for canvas in canvases:
-            canvas.destroy()
-        return
-    window._corner_canvases = canvases
+    if not getattr(window, "_radius_bound", False):
+        window._radius_bound = True
+        try:
+            window.bind("<Configure>", lambda e: _on_window_configure(window, e),
+                        add="+")
+        except tk.TclError:
+            window._radius_bound = False
+    _set_window_region(window, r)
 
 
 class WindowResizer:

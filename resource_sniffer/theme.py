@@ -197,33 +197,9 @@ PRESETS = {
             "image": "#0067c0", "audio": "#7a3fc0",
             "video": "#b02a6a", "stream": "#8a6a00", "other": "#5a5a5a",
         },
-        # 深色版本：Win11 中性灰，标题栏一起变深
-        "dark": {
-            "colors": {
-                "BG": "#202020", "PANEL": "#2b2b2b", "PANEL_ALT": "#272727",
-                "CARD": "#333333", "CARD_HOVER": "#3e3e3e", "BORDER": "#454545",
-                "BORDER_LIGHT": "#5a5a5a", "FG": "#f3f3f3", "FG_DIM": "#bdbdbd",
-                "FG_FAINT": "#8f8f8f", "SUCCESS": "#6ccb5f",
-                "WARN": "#f0c674", "ERROR": "#ff6b6b",
-                "SELECTED_ROW": "#2f4a68", "ROW_HOVER": "#353535",
-                "SEGMENT_BG": "#2c2c2c", "SEGMENT_ACTIVE": "#3c3c3c",
-                "CHIP_BG": "#343434", "THUMB_BG": "#1a1a1a",
-            },
-            "title_bg": "#1c1c1c", "title_fg": "#f3f3f3",
-            "title_sub": "#9a9a9a",
-            "kind_colors": {
-                "image": "#4cc2ff", "audio": "#b48bff",
-                "video": "#ff7aa8", "stream": "#f0c674", "other": "#a0a0a0",
-            },
-            "wallpaper": {
-                "top": "#262626", "base": "#1e1e1e", "bottom": "#181818",
-                "blobs": (
-                    (0.14, 0.12, 0.58, "#2b3a4a", 0.45),
-                    (0.84, 0.30, 0.54, "#33304a", 0.40),
-                ),
-            },
-        },
-        "button_radius": 6, "window_radius": 0,
+        # 性能主题固定浅色、固定直角：不提供深色变体（见 dark_mode=False），
+        # 也不参与圆角设置，避免和原生窗口的样子对不上。
+        "button_radius": 0, "window_radius": 0, "dark_mode": False,
     },
     "retro": {
         "label": "复古 2000",
@@ -387,13 +363,10 @@ WALLPAPERS = {
             (0.52, 0.94, 0.62, "#0f4a55", 0.34),
         ),
     },
-    # 性能主题：中性浅灰，几乎看不出光斑，免得抢注意力
+    # 性能主题：中性浅灰，纯平涂，不要光斑（原生窗口里根本看不到壁纸）
     "perf": {
-        "top": "#f7f7f7", "base": "#f1f1f1", "bottom": "#e9e9e9",
-        "blobs": (
-            (0.14, 0.10, 0.56, "#e6eef7", 0.35),
-            (0.86, 0.28, 0.52, "#ecebea", 0.28),
-        ),
+        "top": "#f3f3f3", "base": "#f3f3f3", "bottom": "#f0f0f0",
+        "blobs": (),
     },
     # 浅色液态玻璃：奶油白 → 天空蓝 → 淡紫，彩色光斑像 iOS 壁纸
     "glass": {
@@ -561,10 +534,15 @@ def button_radius() -> int:
 
 
 def card_radius() -> int:
+    # 性能主题：直角，圆角一律不画
+    if ACTIVE_PRESET == "perf":
+        return 0
     return px(max(6, RADIUS_BUTTON + 2))
 
 
 def small_radius() -> int:
+    if ACTIVE_PRESET == "perf":
+        return 0
     return 0 if CLASSIC else px(6)
 
 
@@ -620,13 +598,24 @@ def variant_colors(colors: dict, dark: bool) -> dict:
 _VARIANT_KEYS = ("title_bg", "title_fg", "title_sub", "wallpaper", "kind_colors")
 
 
+def supports_dark(preset: str) -> bool:
+    """该主题是否提供深色版本（性能主题固定浅色，返回 False）。"""
+    data = PRESETS.get(preset) or {}
+    if data.get("dark_mode") is False:
+        return False
+    return True
+
+
 def variant_palette(data: dict, dark: bool) -> dict:
     """把预设换成目标明暗：优先用手写的浅色/深色变体，没有才整体取反。
 
     手写变体同时覆盖标题栏、壁纸和类型色，所以浅色主题不会只浅一半。
+    声明了 ``dark_mode=False`` 的主题只有一套配色，任何明暗请求都原样返回。
     """
     base_dark = luma(data["colors"].get("BG", "#ffffff")) < 0.45
     if bool(dark) == base_dark:
+        return data
+    if data.get("dark_mode") is False:
         return data
     out = dict(data)
     variant = data.get("dark" if dark else "light")
@@ -664,6 +653,12 @@ def apply_style(preset: str = "acrylic", accent: str = "",
     global RADIUS_BUTTON, RADIUS_WINDOW
 
     key = preset if preset in PRESETS else "acrylic"
+    # 性能主题固定浅色 + 直角：深色和圆角对原生窗口没有意义，直接忽略设置
+    fixed_flat = key == "perf"
+    if fixed_flat:
+        dark = False
+        radius_button = 0
+        radius_window = 0
     # 每套主题都有深/浅两种：优先用手写变体，标题栏、壁纸、类型色一起换
     data = palette_for(key, accent, dark=bool(dark))
     colors = data["colors"]
@@ -724,6 +719,9 @@ def apply_style(preset: str = "acrylic", accent: str = "",
                                      else data.get("button_radius", 10))))
     RADIUS_WINDOW = max(0, min(30, int(radius_window if radius_window is not None
                                      else data.get("window_radius", 0))))
+    if fixed_flat:
+        RADIUS_BUTTON = 0
+        RADIUS_WINDOW = 0
     # 性能主题（motion=none）强制关闭动画：不吃 GPU，也不要有“科技感”的光效
     ANIMATIONS = bool(animations) and MOTION != "none"
     try:

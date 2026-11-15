@@ -1604,36 +1604,89 @@ def _kind_icon(kind: str) -> str:
 
 
 class PlaceholderEntry(tk.Entry):
-    """带占位提示文字的输入框。"""
+    """带占位提示文字的输入框。
+
+    Tk 没有原生 placeholder，提示只能是真文本；所以「用户一开始输入」的每一条
+    路径都必须先把提示清掉——鼠标点击、键盘输入、粘贴、FocusIn 都要管。
+    只靠 FocusIn 不够：无边框窗口里点击输入框经常拿不到 FocusIn 事件，
+    提示会一直留在框里，输入还会插到提示中间，只能手动删。
+    """
+
+    # 这些键不产生文本，不需要清提示
+    _QUIET_KEYS = frozenset({
+        "Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R",
+        "Caps_Lock", "Num_Lock", "Super_L", "Super_R", "Menu",
+        "Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next",
+        "Tab", "ISO_Left_Tab", "Escape",
+    })
 
     def __init__(self, master, placeholder: str = "", **kwargs):
         super().__init__(master, **kwargs)
         self.placeholder = placeholder
         self._showing = False
-        self.bind("<FocusIn>", self._on_focus_in)
-        self.bind("<FocusOut>", self._on_focus_out)
+        self.bind("<FocusIn>", self._on_focus_in, add="+")
+        self.bind("<FocusOut>", self._on_focus_out, add="+")
+        # 点击/按键/粘贴都要先清提示，不能等 FocusIn
+        self.bind("<Button-1>", self._on_click, add="+")
+        self.bind("<KeyPress>", self._on_key_press, add="+")
+        self.bind("<<Paste>>", self._on_before_input, add="+")
+        self.bind("<<Cut>>", self._on_before_input, add="+")
+        # FocusOut 在无边框窗口里也不一定来，点窗口别处时兜底把提示放回去
+        try:
+            self.winfo_toplevel().bind("<Button-1>", self._on_click_elsewhere,
+                                       add="+")
+        except tk.TclError:
+            pass
         if not self.get():
             self._show_placeholder()
 
     def _show_placeholder(self):
-        if self.get():
+        if self.get() or self._showing:
             return
         self._showing = True
         self.insert(0, self.placeholder)
         self.configure(fg=theme.FG_FAINT)
 
+    def _clear_placeholder(self) -> None:
+        if not self._showing:
+            return
+        self.delete(0, "end")
+        self._showing = False
+        self.configure(fg=theme.FG)
+
+    def _on_click(self, _e=None):
+        # 先清再让 Tk 摆光标：否则点击坐标落在提示文字里，输入会插在提示中间
+        self._clear_placeholder()
+
+    def _on_click_elsewhere(self, event=None):
+        """点在窗口别处时，空的输入框把提示放回来。"""
+        if getattr(event, "widget", None) is self:
+            return
+        try:
+            if self.get():
+                return
+        except tk.TclError:
+            return
+        self._show_placeholder()
+
+    def _on_key_press(self, event=None):
+        if self._showing and getattr(event, "keysym", "") not in self._QUIET_KEYS:
+            self._clear_placeholder()
+
+    def _on_before_input(self, _e=None):
+        self._clear_placeholder()
+
     def _on_focus_in(self, _e=None):
-        if self._showing:
-            self.delete(0, "end")
-            self._showing = False
-            self.configure(fg=theme.FG)
+        self._clear_placeholder()
 
     def _on_focus_out(self, _e=None):
         if not self.get():
             self._show_placeholder()
 
     def value(self) -> str:
-        return "" if self._showing else self.get().strip()
+        if self._showing:
+            return ""
+        return self.get().strip()
 
     def set_value(self, text: str) -> None:
         self.delete(0, "end")
