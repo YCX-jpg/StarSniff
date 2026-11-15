@@ -1,4 +1,4 @@
 """StarSniff 星嗅 - 剧集 / 网页媒体资源嗅探与下载工具。"""
 
-__version__ = "3.1.2"
+__version__ = "3.1.3-rc1"
 APP_NAME = "StarSniff 星嗅"

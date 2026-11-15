@@ -1730,10 +1730,12 @@ class PlaceholderEntry(tk.Entry):
         "Tab", "ISO_Left_Tab", "Escape",
     })
 
-    def __init__(self, master, placeholder: str = "", **kwargs):
+    def __init__(self, master, placeholder: str = "", disable_ime: bool = False,
+                 **kwargs):
         super().__init__(master, **kwargs)
         self.placeholder = placeholder
         self._showing = False
+        self._ime_disabled = bool(disable_ime)
         self.bind("<FocusIn>", self._on_focus_in, add="+")
         self.bind("<FocusOut>", self._on_focus_out, add="+")
         # 点击/按键/粘贴都要先清提示，不能等 FocusIn
@@ -1741,6 +1743,9 @@ class PlaceholderEntry(tk.Entry):
         self.bind("<KeyPress>", self._on_key_press, add="+")
         self.bind("<<Paste>>", self._on_before_input, add="+")
         self.bind("<<Cut>>", self._on_before_input, add="+")
+        if self._ime_disabled:
+            self._apply_ime_off()
+            self.bind("<Destroy>", self._on_destroy_ime, add="+")
         # FocusOut 在无边框窗口里也不一定来，点窗口别处时兜底把提示放回去
         try:
             self.winfo_toplevel().bind("<Button-1>", self._on_click_elsewhere,
@@ -1749,6 +1754,21 @@ class PlaceholderEntry(tk.Entry):
             pass
         if not self.get():
             self._show_placeholder()
+
+    def _apply_ime_off(self) -> None:
+        from . import frameless
+
+        frameless.disable_ime(self)
+        # 只解除关联有时不够：再把输入法切到英文，字母才不会被候选框吞掉
+        frameless.force_ascii_ime(self)
+
+    def _on_destroy_ime(self, event=None) -> None:
+        if event is not None and event.widget is not self:
+            return
+        if self._ime_disabled:
+            from . import frameless
+
+            frameless.restore_ime(self)
 
     def _show_placeholder(self):
         if self.get() or self._showing:
@@ -1765,6 +1785,14 @@ class PlaceholderEntry(tk.Entry):
         self.configure(fg=theme.FG)
 
     def _on_click(self, _e=None):
+        # 无边框窗口里点击不一定会把键盘焦点交给输入框，这里强制拿一次；
+        # 否则第一下点击只激活窗口，用户看起来就是「打不进去字」。
+        try:
+            self.focus_force()
+        except tk.TclError:
+            pass
+        if self._ime_disabled:
+            self._apply_ime_off()
         # 先清再让 Tk 摆光标：否则点击坐标落在提示文字里，输入会插在提示中间
         self._clear_placeholder()
 
@@ -1787,9 +1815,16 @@ class PlaceholderEntry(tk.Entry):
         self._clear_placeholder()
 
     def _on_focus_in(self, _e=None):
-        self._clear_placeholder()
+        if self._ime_disabled:
+            self._apply_ime_off()
+        # 这里不清提示：启动时地址栏是自动聚焦的，清掉会让提示一打开就消失；
+        # 用户真正开始输入时会走点击 / 按键 / 粘贴分支去清。
 
     def _on_focus_out(self, _e=None):
+        if self._ime_disabled:
+            from . import frameless
+
+            frameless.restore_ime(self)
         if not self.get():
             self._show_placeholder()
 

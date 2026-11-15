@@ -32,10 +32,117 @@ def _hwnd(window) -> int:
         return 0
 
 
+def bind_entry_focus(widget, disable_ime_field: bool = False) -> None:
+    """点一下输入框就强制拿键盘焦点（无边框窗口里第一下点击常常只激活窗口）。
+
+    ``disable_ime_field=True`` 时顺便把输入法切到英文：这类无边框窗口里
+    输入法候选框不一定正常，中文模式下字母会被吞掉，看起来就是打不进字。
+    """
+    if disable_ime_field:
+        disable_ime(widget)
+
+    def _on_click(_event=None):
+        try:
+            widget.focus_force()
+        except tk.TclError:
+            pass
+        if disable_ime_field:
+            disable_ime(widget)
+            force_ascii_ime(widget)
+
+    def _on_blur(_event=None):
+        if disable_ime_field:
+            restore_ime(widget)
+
+    try:
+        widget.bind("<Button-1>", _on_click, add="+")
+        widget.bind("<FocusOut>", _on_blur, add="+")
+    except tk.TclError:
+        pass
+
+
 def _user32():
     import ctypes
 
     return ctypes.windll.user32
+
+
+IME_CMODE_ALPHANUMERIC = 0x0000
+
+
+def force_ascii_ime(widget) -> bool:
+    """把当前输入法切到英文（半角）并关掉候选框，纯 ASCII 输入框用。
+
+    无边框窗口里 Tk 的输入法组合不一定能正常显示；中文输入法开着时字母会
+    被吞进候选，表现为「打不进去字」。URL 这类字段直接强制英文输入，
+    失焦时再恢复原来的输入法状态。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        imm = ctypes.windll.imm32
+        user32 = ctypes.windll.user32
+        hwnd = int(user32.GetFocus() or widget.winfo_id())
+        himc = imm.ImmGetContext(hwnd)
+        if not himc:
+            return False
+        conversion = ctypes.c_ulong()
+        sentence = ctypes.c_ulong()
+        imm.ImmGetConversionStatus(himc, ctypes.byref(conversion),
+                                   ctypes.byref(sentence))
+        widget._ime_state = (hwnd, int(conversion.value),
+                             int(sentence.value),
+                             bool(imm.ImmGetOpenStatus(himc)))
+        imm.ImmSetConversionStatus(himc, IME_CMODE_ALPHANUMERIC, 0)
+        imm.ImmSetOpenStatus(himc, False)
+        imm.ImmReleaseContext(hwnd, himc)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def restore_ime(widget) -> None:
+    """恢复 force_ascii_ime 之前的输入法状态。"""
+    state = getattr(widget, "_ime_state", None)
+    widget._ime_state = None
+    if not state or os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        imm = ctypes.windll.imm32
+        hwnd, conversion, sentence, opened = state
+        himc = imm.ImmGetContext(hwnd)
+        if not himc:
+            return
+        imm.ImmSetConversionStatus(himc, conversion, sentence)
+        imm.ImmSetOpenStatus(himc, bool(opened))
+        imm.ImmReleaseContext(hwnd, himc)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def disable_ime(widget) -> bool:
+    """关掉某个输入框的输入法（只用于 URL / 端口这类纯 ASCII 字段）。
+
+    这类窗口是无边框自绘的，Tk 的输入法组合在个别环境下不会显示候选框，
+    开着中文输入法时字母会被吞进候选、看起来就是「打不进去字」。
+    把该控件的 IME 上下文解除关联，按键就直接进输入框。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        hwnd = widget.winfo_id()
+        if not hwnd:
+            return False
+        ctypes.windll.imm32.ImmAssociateContext(hwnd, 0)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def apply_taskbar_style(window) -> None:

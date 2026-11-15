@@ -140,7 +140,10 @@ class MainWindow(tk.Tk):
         self._update_job = self.after(1600, self._auto_check_updates)
         # 打开动画：窗口淡入 + 从下方滑入；从最小化还原时也重放一次
         self._mapped = False
+        # 首次获得键盘焦点时把光标放进地址栏（只做一次，之后不再抢焦点）
+        self._startup_focus_pending = True
         self.bind("<Map>", self._on_window_map, add="+")
+        self.bind("<FocusIn>", self._on_toplevel_focus, add="+")
         self.after(70, self._play_open_animation)
         self._log("就绪。输入网址开始嗅探。")
 
@@ -154,6 +157,36 @@ class MainWindow(tk.Tk):
         motion.open_window(self, dy=theme.px(14), duration=180,
                            target=self._window_alpha())
         self._intro_done = True
+        # 打开后把焦点交给地址栏：键盘立刻可用，也避免「第一次点击只激活窗口、
+        # 输入框收不到点击」——用户看到的就是点一下直接能打字。
+        if not getattr(self, "_closing", False):
+            self.after(240, self._focus_input)
+
+    def _focus_input(self) -> None:
+        """把键盘焦点放到地址栏（窗口刚打开时）。"""
+        if getattr(self, "_closing", False):
+            return
+        try:
+            if not self.winfo_ismapped():
+                return
+            dialog = getattr(self, "_settings_dialog", None)
+            if dialog is not None and dialog.winfo_exists():
+                return
+            self.url_entry.focus_force()
+            self._startup_focus_pending = False
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _on_toplevel_focus(self, event=None) -> None:
+        """窗口第一次真正拿到键盘焦点时补一次地址栏聚焦。
+
+        启动时 focus_force 可能因为窗口还没被激活而无效，
+        等系统把窗口激活后这里再补一次；只补一次，之后不再抢焦点。
+        """
+        if event is not None and event.widget is not self:
+            return
+        if getattr(self, "_startup_focus_pending", False):
+            self._focus_input()
 
     def _on_window_map(self, event=None) -> None:
         """从最小化还原时再做一次淡入（首次显示由 _play_open_animation 负责）。"""
@@ -705,7 +738,7 @@ class MainWindow(tk.Tk):
             field, "输入网页地址或资源直链，例如 https://example.com/page.html",
             bg=bg, fg=theme.FG, insertbackground=theme.FG,
             relief="flat", bd=0, font=(theme.FONT_FAMILY, 10),
-            highlightthickness=0)
+            highlightthickness=0, disable_ime=True)
         ipady = max(4, theme.px(max(0, (height - 22) // 2)))
         self.url_entry.pack(side="left", fill="x", expand=True,
                             ipady=ipady, padx=(theme.px(6), theme.px(10)))
@@ -955,6 +988,7 @@ class MainWindow(tk.Tk):
                    ipady=theme.px(4))
         self.search_entry = entry
         self._search_border = search
+        frameless.bind_entry_focus(entry, disable_ime_field=True)
         entry.bind("<FocusIn>", lambda _e: self._set_search_focus(True),
                    add="+")
         entry.bind("<FocusOut>", lambda _e: self._set_search_focus(False),

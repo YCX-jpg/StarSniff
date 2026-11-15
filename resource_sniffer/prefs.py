@@ -708,6 +708,7 @@ class SettingsDialog(tk.Toplevel):
         self._show_page("appearance")
         self.update_idletasks()
         self._center_on(master)
+        self._bind_text_inputs()
         # 先让窗口完成映射/置前，再在下一帧开始淡入（不做 modal，主界面照常可用）
         self.after(20, self._activate_window)
         self.after(40, lambda: motion.open_window(self, dy=theme.px(10),
@@ -1310,6 +1311,8 @@ class SettingsDialog(tk.Toplevel):
             highlightcolor=theme.ACCENT)
         self.entry_proxy.insert(0, self.cfg.proxy)
         self.entry_proxy.pack(side="left", fill="x", expand=True)
+        # 代理地址是纯 ASCII：关掉输入法，并保证点一下就拿到焦点
+        frameless.bind_entry_focus(self.entry_proxy, disable_ime_field=True)
 
         row = tk.Frame(page, bg=theme.BG)
         row.pack(fill="x", pady=theme.px(3))
@@ -1714,6 +1717,24 @@ class SettingsDialog(tk.Toplevel):
         except tk.TclError:
             pass
         self._apply_window_radius()
+
+    def _bind_text_inputs(self) -> None:
+        """设置里所有能打字的控件：点一下强制拿键盘焦点。
+
+        无边框窗口里第一下点击经常只激活窗口、不把焦点交给输入框，
+        用户看到的现象就是「点了也打不进字」。
+        """
+        stack = list(self.winfo_children())
+        while stack:
+            widget = stack.pop()
+            try:
+                stack.extend(widget.winfo_children())
+            except tk.TclError:
+                continue
+            if isinstance(widget, (tk.Entry, tk.Spinbox, tk.Text)):
+                if widget is getattr(self, "entry_proxy", None):
+                    continue          # 代理输入框创建时已经处理过（含关输入法）
+                frameless.bind_entry_focus(widget)
 
     def _apply_window_radius(self) -> None:
         """设置窗口也吃「窗口圆角」设置；性能主题是 0，保持直角。"""
