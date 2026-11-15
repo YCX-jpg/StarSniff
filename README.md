@@ -1,7 +1,7 @@
 # StarSniff 星嗅
 
 > StarSniff = **Star**（星） + **Sniff**（嗅探）：拿起望远镜，把网页里的剧集与媒体资源一网打尽。
-
+>使用DeepSeekHARNESS+DeepSeek-V4.1-Flash-1017制作
 [![Release](https://img.shields.io/github/v/release/YCX-jpg/StarSniff?label=release)](https://github.com/YCX-jpg/StarSniff/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
